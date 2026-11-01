@@ -1,4 +1,4 @@
-set(PGO_FLAGS "-march=znver3 -mtune=znver3 /clang:-fprofile-use=${CMAKE_CURRENT_LIST_DIR}/eglantine.profdata /clang:-Wno-profile-instr-unprofiled /clang:-Wno-profile-instr-out-of-date /clang:-Wno-backend-plugin")
+set(PGO_FLAGS "-march=x86-64-v3 -mtune=generic /clang:-fprofile-use=${CMAKE_CURRENT_LIST_DIR}/eglantine.profdata /clang:-Wno-profile-instr-unprofiled /clang:-Wno-profile-instr-out-of-date /clang:-Wno-backend-plugin")
 set(CMAKE_BUILD_TYPE Release CACHE STRING "")
 set(CMAKE_C_COMPILER "C:/LLVM/bin/clang-cl.exe" CACHE FILEPATH "")
 set(CMAKE_CXX_COMPILER "C:/LLVM/bin/clang-cl.exe" CACHE FILEPATH "")

@@ -10,7 +10,7 @@ Get the zip from the Releases page, extract it into its own folder, and run `egl
 
 **You need:**
 
-- A CPU that supports Zen 3 instructions. This build is compiled with `-march=znver3`, so it may crash on start on older AMD CPUs and many Intel CPUs. If that happens, use the official build 31 or build from source with your own flags.
+- A CPU with AVX2. This build is compiled with `-march=x86-64-v3`, so it won't run on CPUs without AVX2, such as older Intel CPUs and some Pentium and Celeron chips. If that happens, use the official build 31 or build from source with your own flags.
 - The latest [Microsoft Visual C++ x64 runtime](https://aka.ms/vs/17/release/vc_redist.x64.exe).
 - Your own legally dumped keys, firmware and games. None are included.
 
@@ -25,7 +25,7 @@ Get the zip from the Releases page, extract it into its own folder, and run `egl
 | Command entries only wait when their page was GPU-written before | `dma_pusher.cpp` | No measurable fps change in repeated no-input tests. A page's first write can show stale commands for one frame. `EDEN_NX2_COMMAND_DRAIN=1` restores the old wait. |
 | Tested settings are the defaults | `src/common/settings.h`, `src/core/game_settings.*` | Controller mappings aren't included. Booted to rendered frames with a default config and no input; a full race has not been run on this exact build. |
 
-The release is also built with Clang 23.1.4, ThinLTO, Zen 3 tuning and a profile trained on about 7 minutes of Mario Kart World.
+The release is also built with Clang 23.1.4, ThinLTO, an `x86-64-v3` target and a profile trained on about 7 minutes of Mario Kart World.
 
 ## Launch flags
 
