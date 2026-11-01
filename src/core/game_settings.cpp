@@ -126,6 +126,17 @@ void LoadOverrides(std::uint64_t program_id, const VideoCore::RendererBase& rend
         case TitleID::NinjaGaidenRagebound:
             Settings::values.use_squashed_iterated_blend = true;
             break;
+        case TitleID::MarioKartWorld:
+            // Tuned build: the tested values, unless this game has its own custom setting.
+            if (Settings::values.gpu_fence_behavior.UsingGlobal()) {
+                Settings::values.gpu_fence_behavior.SetGlobal(false);
+                Settings::values.gpu_fence_behavior.SetValue(Settings::GpuFenceBehavior::Immediate);
+            }
+            if (Settings::values.fsr_sharpening_slider.UsingGlobal()) {
+                Settings::values.fsr_sharpening_slider.SetGlobal(false);
+                Settings::values.fsr_sharpening_slider.SetValue(35);
+            }
+            break;
         default:
             break;
     }

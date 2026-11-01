@@ -6,7 +6,7 @@ It is based on [zortos293/Eglantine build 31](https://github.com/zortos293/Eglan
 
 ## Download
 
-Get the zip from the Releases page, extract it into its own folder, and run `launch-tuned.cmd`.
+Get the zip from the Releases page, extract it into its own folder, and run `eglantine.exe`. Settings are already built in, so you only need to add your keys and firmware and map your controller.
 
 **You need:**
 
@@ -22,22 +22,25 @@ Get the zip from the Releases page, extract it into its own folder, and run `lau
 | Async draw check uses the current draw's real count | `draw_manager.cpp`, `maxwell_3d.h`, `vk_pipeline_cache.cpp` | The old check could read a stale count from the buffer the draw doesn't use. `EDEN_NX2_STALE_DRAW_COUNTS=1` restores it for comparison. |
 | Logs draws waiting on a pipeline build | `vk_graphics_pipeline.cpp` | Diagnostics only. |
 | Saves the PGO profile every 30 s in training builds | `src/yuzu/main.cpp` | Only compiled with `EGLANTINE_PGO_GENERATE`. |
+| Tested settings are the defaults | `src/common/settings.h`, `src/core/game_settings.*` | Controller mappings aren't included. The Mario Kart World override was not run in a game before this release. |
 
 The release is also built with Clang 23.1.4, ThinLTO, Zen 3 tuning and a profile trained on about 7 minutes of Mario Kart World.
 
 ## Launch flags
 
-`launch-tuned.cmd` sets `EDEN_NX2_UNSAFE_PREEMPTIVE_READS=1`, an unsafe shortcut that build 31's own README does not recommend by default. Unlike build 31's launcher, it leaves the split GPU thread on, because the project's notes measured it at 1.46x throughput and it helped on this 6-core CPU.
+`nx2_switches.txt` beside the program sets `EDEN_NX2_UNSAFE_PREEMPTIVE_READS=1`, an unsafe shortcut that build 31's own README does not recommend by default. Delete that line if you get glitches. Unlike build 31's launcher, this build leaves the split GPU thread on, because the project's notes measured it at 1.46x throughput.
 
-Running `eglantine.exe` directly turns the unsafe reads off.
+## Built-in settings
 
-## Settings used in testing
+These are the program's defaults, in `src/common/settings.h`. They apply to all games, and Unsafe accuracy can break some Switch 1 titles, so change them in the emulator's settings or per game if something misbehaves. If you already have an Eden or Eglantine config, any settings you changed yourself stay as they are.
 
 | Setting | Value |
 |---|---|
 | GPU mode | Fast |
 | DMA accuracy | Unsafe |
-| GPU fence behaviour | Immediate |
+| GPU fence behaviour | Balanced (Immediate for Mario Kart World) |
+| Scaling filter | ScaleForce |
+| Memory layout | 8 GB (Switch 2 games always use 12 GB) |
 | CPU accuracy | Unsafe |
 | Asynchronous shaders | On |
 | Asynchronous presentation | On |

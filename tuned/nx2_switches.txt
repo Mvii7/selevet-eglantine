@@ -1,0 +1,3 @@
+# Read at every start of the Eglantine GUI. One NAME=VALUE per line, # for comments.
+# Unsafe shortcut. Delete the line below if you get glitches.
+EDEN_NX2_UNSAFE_PREEMPTIVE_READS=1

@@ -204,7 +204,7 @@ struct Values {
     // Core
     SwitchableSetting<bool> use_multi_core{linkage, true, "use_multi_core", Category::Core};
     SwitchableSetting<MemoryLayout, true> memory_layout_mode{linkage,
-                                                             MemoryLayout::Memory_4Gb,
+                                                             MemoryLayout::Memory_8Gb,
                                                              "memory_layout_mode",
                                                              Category::Core,
                                                              Specialization::Default,
@@ -264,7 +264,7 @@ struct Values {
 #endif
                                                     "cpu_backend",
                                                     Category::Cpu};
-    SwitchableSetting<CpuAccuracy, true> cpu_accuracy{linkage, CpuAccuracy::Auto,
+    SwitchableSetting<CpuAccuracy, true> cpu_accuracy{linkage, CpuAccuracy::Unsafe,
                                                       "cpu_accuracy", Category::Cpu};
     SwitchableSetting<CpuClock> cpu_clock{linkage,
                                               CpuClock::Normal,
@@ -346,7 +346,7 @@ struct Values {
 
     // Graphics Settings
     ResolutionScalingInfo resolution_info{};
-    SwitchableSetting<ResolutionSetup> resolution_setup{linkage, ResolutionSetup::Res1X,
+    SwitchableSetting<ResolutionSetup> resolution_setup{linkage, ResolutionSetup::Res1_2X,
                                                         "resolution_setup", Category::Renderer};
 
     SwitchableSetting<VSyncMode, true> vsync_mode{linkage,
@@ -358,7 +358,7 @@ struct Values {
                                                   true};
 
     SwitchableSetting<ScalingFilter> scaling_filter{linkage,
-                                                    ScalingFilter::NearestNeighbor,
+                                                    ScalingFilter::ScaleForce,
                                                     "scaling_filter",
                                                     Category::Renderer,
                                                     Specialization::Default,
@@ -368,7 +368,7 @@ struct Values {
 #ifdef __ANDROID__
                                                        0,
 #else
-                                                       25,
+                                                       57,
 #endif
                                                        0,
                                                        200,
@@ -411,7 +411,7 @@ struct Values {
                                                       true};
 
     SwitchableSetting<bool> post_shader_enabled{linkage,
-                                                true,
+                                                false,
                                                 "post_shader_enabled",
                                                 Category::Renderer,
                                                 Specialization::Default,
@@ -514,7 +514,7 @@ struct Values {
 #ifdef __ANDROID__
                                                       GpuAccuracy::Low,
 #else
-                                                      GpuAccuracy::High,
+                                                      GpuAccuracy::Low,
 #endif
                                                       "gpu_accuracy",
                                                       Category::RendererAdvanced,
@@ -525,7 +525,7 @@ struct Values {
     GpuAccuracy current_gpu_accuracy{GpuAccuracy::High};
 
     SwitchableSetting<DmaAccuracy, true> dma_accuracy{linkage,
-                                                      DmaAccuracy::Default,
+                                                      DmaAccuracy::Unsafe,
                                                       "dma_accuracy",
                                                       Category::RendererAdvanced,
                                                       Specialization::Default,
@@ -533,7 +533,7 @@ struct Values {
                                                       true};
 
     SwitchableSetting<GpuFenceBehavior, true> gpu_fence_behavior{linkage,
-                                                                 GpuFenceBehavior::Default,
+                                                                 GpuFenceBehavior::Balanced,
                                                                  GpuFenceBehavior::Default,
                                                                  GpuFenceBehavior::Accurate,
                                                                  "gpu_fence_behavior",
@@ -543,7 +543,7 @@ struct Values {
                                                                  true};
 
     SwitchableSetting<VramUsageMode, true> vram_usage_mode{linkage,
-                                                           VramUsageMode::Conservative,
+                                                           VramUsageMode::Aggressive,
                                                            "vram_usage_mode",
                                                            Category::RendererAdvanced};
 
@@ -594,7 +594,7 @@ struct Values {
                                                   Category::RendererAdvanced};
 
     SwitchableSetting<bool> use_vulkan_driver_pipeline_cache{
-        linkage, true, "use_vulkan_driver_pipeline_cache", Category::RendererAdvanced,
+        linkage, false, "use_vulkan_driver_pipeline_cache", Category::RendererAdvanced,
         Specialization::Default};
 
     SwitchableSetting<bool> enable_compute_pipelines{linkage, false, "enable_compute_pipelines",
@@ -607,7 +607,7 @@ struct Values {
 #ifdef __ANDROID__
                                                   false,
 #else
-                                                  true,
+                                                  false,
 #endif
                                                   "use_reactive_flushing",
                                                   Category::RendererAdvanced};
@@ -653,7 +653,7 @@ struct Values {
 #ifdef __ANDROID__
                                                true,
 #else
-                                               false,
+                                               true,
 #endif
                                                "async_presentation", Category::RendererHacks};
 
@@ -663,7 +663,7 @@ struct Values {
     SwitchableSetting<bool> emulate_bgr565{linkage, false, "emulate_bgr565",
                                             Category::RendererHacks};
 
-    SwitchableSetting<bool> use_asynchronous_shaders{linkage, false, "use_asynchronous_shaders",
+    SwitchableSetting<bool> use_asynchronous_shaders{linkage, true, "use_asynchronous_shaders",
                                                      Category::RendererHacks};
 
     SwitchableSetting<GpuUnswizzleSize> gpu_unswizzle_texture_size{linkage,
@@ -771,7 +771,7 @@ struct Values {
 #ifdef __ANDROID__
                                                    ConsoleMode::Handheld,
 #else
-                                                   ConsoleMode::Docked,
+                                                   ConsoleMode::Handheld,
 #endif
                                                    "use_docked_mode",
                                                    Category::System,
