@@ -1,4 +1,4 @@
-# Eglantine tuned
+# Selevet Eglantine
 
 An experimental, unofficial Windows build of the Eglantine Nintendo Switch 2 emulator, tuned for Mario Kart World on a Ryzen 5 5500 with an RTX 3050 8 GB and 16 GB of RAM.
 
@@ -22,6 +22,7 @@ Get the zip from the Releases page, extract it into its own folder, and run `egl
 | Async draw check uses the current draw's real count | `draw_manager.cpp`, `maxwell_3d.h`, `vk_pipeline_cache.cpp` | The old check could read a stale count from the buffer the draw doesn't use. `EDEN_NX2_STALE_DRAW_COUNTS=1` restores it for comparison. |
 | Logs draws waiting on a pipeline build | `vk_graphics_pipeline.cpp` | Diagnostics only. |
 | Saves the PGO profile every 30 s in training builds | `src/yuzu/main.cpp` | Only compiled with `EGLANTINE_PGO_GENERATE`. |
+| Command entries only wait when their page was GPU-written before | `dma_pusher.cpp` | No measurable fps change in repeated no-input tests. A page's first write can show stale commands for one frame. `EDEN_NX2_COMMAND_DRAIN=1` restores the old wait. |
 | Tested settings are the defaults | `src/common/settings.h`, `src/core/game_settings.*` | Controller mappings aren't included. Booted to rendered frames with a default config and no input; a full race has not been run on this exact build. |
 
 The release is also built with Clang 23.1.4, ThinLTO, Zen 3 tuning and a profile trained on about 7 minutes of Mario Kart World.
@@ -61,8 +62,9 @@ Tested on one PC only: Ryzen 5 5500, RTX 3050 8 GB, 16 GB RAM at 3600 MHz, Mario
 
 | Run | Median fps | Lowest 600-frame average |
 |---|---|---|
-| This build, sync memory on | 36.7 | 23.5 |
-| This build, sync memory off | 42 | 24.2 |
+| This build, played at 1x resolution | 55.5 | 25.9 |
+| v1, sync memory on, 0.5x | 36.7 | 23.5 |
+| v1, sync memory off, 0.5x | 42 | 24.2 |
 
 The sync memory off run was short, so treat it as promising, not final. Heavy tracks can still drop while textures load, and this is not a locked 60 fps.
 

@@ -853,14 +853,24 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
         return;
     }
     // The caches belong to the split's back, and the words may be written by work the front queued
-    // that the back has not run (or marked written) yet: it runs all of it first.
+    // that the back has not run (or marked written) yet: it runs all of it first. Waiting at every
+    // entry keeps the split's two threads from overlapping, so only do it for pages the GPU has
+    // written before. The bits never clear, so a page's first write can be missed for one frame.
+    // EDEN_NX2_COMMAND_DRAIN=1 always waits.
+    static const bool always_drain = std::getenv("EDEN_NX2_COMMAND_DRAIN") != nullptr;
+    const auto written = [&] {
+        return Nx2HasGpuWrittenPage(address, size, [&](GPUVAddr page) {
+            return memory_manager.GpuToCpuAddress(page);
+        });
+    };
     auto& split = VideoCommon::GpuSplit::Get();
     if (split.Active()) {
+        if (!always_drain && !written()) {
+            return;
+        }
         split.Drain();
     }
-    if (!Nx2HasGpuWrittenPage(address, size, [&](GPUVAddr page) {
-            return memory_manager.GpuToCpuAddress(page);
-        })) {
+    if (!written()) {
         return;
     }
     if (memory_manager.IsMemoryDirty(address, size, VideoCommon::CacheType::BufferCache)) {

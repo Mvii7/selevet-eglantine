@@ -1,4 +1,4 @@
-> **Eglantine tuned:** an unofficial, experimental build tuned for Zen 3 CPUs. See [tuned/README.md](tuned/README.md) for what's different, then the original README below.
+> **Selevet Eglantine:** an unofficial, experimental build tuned for Zen 3 CPUs. See [tuned/README.md](tuned/README.md) for what's different, then the original README below.
 
 <!--
 # SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
