@@ -15,7 +15,13 @@ namespace Service {
 struct Nx2SparseRegion {
     static constexpr u64 BlockSize = 4ULL << 20;
 
-    enum class Block : u8 { Empty, Backed, Failed, Pending };
+    enum class Block : u8 {
+        Empty,
+        Backed,
+        Failed,
+        Pending,
+        Written, ///< Written in a region the game maps tiles into
+    };
 
     struct PendingBlock {
         u64 index;
@@ -51,6 +57,8 @@ struct Nx2SparseRegion {
     std::vector<Block> blocks;
     bool warned{};
     u64 generation;
+    bool tiles{};                 ///< The game maps its own memory into it (216): no blocks
+    std::vector<bool> tile_pages; ///< Pages a tile maps, once `tiles`
 };
 
 } // namespace Service

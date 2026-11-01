@@ -10,6 +10,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <mutex>
+#include <set>
 #include <span>
 #include <thread>
 #include <type_traits>

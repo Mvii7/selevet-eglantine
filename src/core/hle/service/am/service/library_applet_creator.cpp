@@ -4,6 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <mutex>
+#include <unordered_set>
+
 #include "common/settings.h"
 #include "core/hle/kernel/k_transfer_memory.h"
 #include "core/hle/service/am/applet_data_broker.h"
@@ -194,6 +197,7 @@ Result ILibraryAppletCreator::CreateLibraryApplet(
               library_applet_mode);
     applet_id = FromNx2AppletId(applet_id);
 
+
     std::shared_ptr<ILibraryAppletAccessor> library_applet;
     if (ShouldCreateGuestApplet(applet_id)) {
         library_applet =
@@ -220,6 +224,7 @@ Result ILibraryAppletCreator::CreateLibraryAppletEx(
     LOG_DEBUG(Service_AM, "called with applet_id={} applet_mode={} thread_id={}", applet_id,
               library_applet_mode, thread_id);
     applet_id = FromNx2AppletId(applet_id);
+
 
     std::shared_ptr<ILibraryAppletAccessor> library_applet;
     if (ShouldCreateGuestApplet(applet_id)) {

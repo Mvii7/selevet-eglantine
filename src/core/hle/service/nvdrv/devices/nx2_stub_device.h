@@ -48,6 +48,9 @@ public:
     /// A block of a sparse region gets memory [cpu_address, +size).
     using BackListener = std::function<void(u64 gpu_address, u64 cpu_address, u64 size)>;
     using ReserveListener = std::function<void(u64 gpu_address, u64 size)>;
+    /// A tile of a sparse region shows process memory [cpu_address, +size), or reads zero again
+    /// (cpu_address 0).
+    using TileListener = std::function<void(u64 gpu_address, u64 cpu_address, u64 size)>;
 
     static Nx2GpuMemoryRegistry& Get() {
         static Nx2GpuMemoryRegistry registry;
@@ -175,9 +178,23 @@ public:
         }
     }
 
+    // nx2:gpu 216 (sparse map requests): the tile [gpu_address, +size) of a sparse region now
+    // shows the process memory at cpu_address, the game's own memory (sub 101), or with
+    // cpu_address 0 it is unmapped and reads zero. The GPU mapping stays as it is; only the
+    // region's device pages change, in GPU-thread order.
+    void MapSparseTile(u64 gpu_address, u64 cpu_address, u64 size) {
+        std::scoped_lock lk{mutex};
+        for (auto& [owner, listener] : listeners) {
+            if (listener.tile) {
+                listener.tile(gpu_address, cpu_address, size);
+            }
+        }
+    }
+
     void AddListener(const void* owner, Listener listener, UnmapListener unmap_listener,
                      ReleaseListener release_listener = {}, SparseListener sparse_listener = {},
-                     BackListener back_listener = {}, ReserveListener reserve_listener = {}) {
+                     BackListener back_listener = {}, ReserveListener reserve_listener = {},
+                     TileListener tile_listener = {}) {
         std::scoped_lock lk{mutex};
         const auto& added =
             listeners
@@ -185,7 +202,8 @@ public:
                                                    std::move(release_listener),
                                                    std::move(sparse_listener),
                                                    std::move(back_listener),
-                                                   std::move(reserve_listener)})
+                                                   std::move(reserve_listener),
+                                                   std::move(tile_listener)})
                 .first->second;
         if (added.sparse) {
             for (const auto& [gpu_address, region] : sparse_regions) {
@@ -252,6 +270,7 @@ private:
         SparseListener sparse;
         BackListener back;
         ReserveListener reserve;
+        TileListener tile;
     };
 
     struct SparseBacking {
