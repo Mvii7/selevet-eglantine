@@ -22,7 +22,7 @@ Get the zip from the Releases page, extract it into its own folder, and run `egl
 | Async draw check uses the current draw's real count | `draw_manager.cpp`, `maxwell_3d.h`, `vk_pipeline_cache.cpp` | The old check could read a stale count from the buffer the draw doesn't use. `EDEN_NX2_STALE_DRAW_COUNTS=1` restores it for comparison. |
 | Logs draws waiting on a pipeline build | `vk_graphics_pipeline.cpp` | Diagnostics only. |
 | Saves the PGO profile every 30 s in training builds | `src/yuzu/main.cpp` | Only compiled with `EGLANTINE_PGO_GENERATE`. |
-| Tested settings are the defaults | `src/common/settings.h`, `src/core/game_settings.*` | Controller mappings aren't included. The Mario Kart World override was not run in a game before this release. |
+| Tested settings are the defaults | `src/common/settings.h`, `src/core/game_settings.*` | Controller mappings aren't included. Booted to rendered frames with a default config and no input; a full race has not been run on this exact build. |
 
 The release is also built with Clang 23.1.4, ThinLTO, Zen 3 tuning and a profile trained on about 7 minutes of Mario Kart World.
 
@@ -34,13 +34,15 @@ The release is also built with Clang 23.1.4, ThinLTO, Zen 3 tuning and a profile
 
 These are the program's defaults, in `src/common/settings.h`. They apply to all games, and Unsafe accuracy can break some Switch 1 titles, so change them in the emulator's settings or per game if something misbehaves. If you already have an Eden or Eglantine config, any settings you changed yourself stay as they are.
 
+**This build shares its config with other Eden and Eglantine builds.** When it saves your config, settings that match these defaults get marked as "default", so another build you open afterwards will use its own defaults for them instead, which can be much slower. Back up `%APPDATA%\eden\config` first if you switch between builds. Creating an empty `user` folder beside `eglantine.exe` gives this build its own separate data, but you then need to put your keys and firmware there.
+
 | Setting | Value |
 |---|---|
 | GPU mode | Fast |
 | DMA accuracy | Unsafe |
 | GPU fence behaviour | Balanced (Immediate for Mario Kart World) |
 | Scaling filter | ScaleForce |
-| Memory layout | 8 GB (Switch 2 games always use 12 GB) |
+| Memory layout | Stock default (Switch 2 games always use 12 GB) |
 | CPU accuracy | Unsafe |
 | Asynchronous shaders | On |
 | Asynchronous presentation | On |
