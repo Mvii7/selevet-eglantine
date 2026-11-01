@@ -1,0 +1,5 @@
+# Read at every start of the Eglantine GUI. One NAME=VALUE per line, # for comments.
+# Unsafe shortcut. Delete the line below if you get glitches.
+EDEN_NX2_UNSAFE_PREEMPTIVE_READS=1
+# 30FPS PATCH: limits the game to 30 fps. Delete the line below to go back to 60.
+EDEN_NX2_PRESENT_HZ=30

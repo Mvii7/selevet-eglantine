@@ -85,6 +85,10 @@ cmake --build build/pgo-use --target yuzu
 
 To train your own profile, build with `tuned/pgo-gen-cache.cmake`, run with `LLVM_PROFILE_FILE` set, play for a while, then merge the output with `llvm-profdata merge -o tuned/eglantine.profdata`. A profile trained on your own games and CPU should suit you better than the one included here.
 
+## 30FPS PATCH
+
+The 30FPS PATCH release limits the game to 30 fps. It uses this source with `tuned/nx2_switches-30fps.txt` as `nx2_switches.txt` beside the exe. `EDEN_NX2_PRESENT_HZ=<rate>` sets the limit; without it, the game is held to 60 as usual.
+
 ## License and AI disclosure
 
 GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.
