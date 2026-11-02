@@ -247,6 +247,11 @@ public:
 
     void DownloadMemory(DAddr device_addr, u64 size);
 
+    /// Downloads until EndDownloadBatch share one wait for the GPU; their words land in guest
+    /// memory at EndDownloadBatch.
+    void BeginDownloadBatch();
+    void EndDownloadBatch();
+
     std::optional<VideoCore::RasterizerDownloadArea> GetFlushArea(DAddr device_addr, u64 size);
 
     /// Without downloads at every fence, a guest CPU read is the only way GPU-written buffer
@@ -578,6 +583,13 @@ private:
 
     Common::RangeSet<DAddr> read_trapped_ranges;
     Common::RangeSet<DAddr> gpu_modified_ranges;
+    struct BatchedDownload {
+        DAddr device_addr;
+        const u8* staging;
+        u64 size;
+    };
+    bool download_batch{};
+    std::vector<BatchedDownload> batched_downloads;
     std::deque<Common::RangeSet<DAddr>> committed_gpu_modified_ranges;
     /// Buffer pages the guest CPU reads (NoteCpuRead). Without AsyncBufferDownloads, GPU writes
     /// to them are still copied back at fences: Pokemon Pokopia builds its sky, fog and exposure

@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2019 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -301,8 +303,28 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
         return true;
     }};
 
+    // Waking this thread from a sleep delays every submission a reader is waiting on: look for more
+    // work for a moment first. EDEN_NX2_GPU_WAIT_SPIN_US=0 turns this off (see MasterSemaphore::Wait).
+    const auto spin = std::chrono::microseconds{[] {
+        const char* value = std::getenv("EDEN_NX2_GPU_WAIT_SPIN_US");
+        return value != nullptr ? std::atoi(value) : 300;
+    }()};
+
     while (!stop_token.stop_requested()) {
         std::unique_ptr<CommandChunk> work;
+
+        if (spin.count() > 0) {
+            const auto end = std::chrono::steady_clock::now() + spin;
+            do {
+                {
+                    std::scoped_lock lk{queue_mutex};
+                    if (!work_queue.empty()) {
+                        break;
+                    }
+                }
+                std::this_thread::yield();
+            } while (std::chrono::steady_clock::now() < end);
+        }
 
         {
             std::unique_lock lk{queue_mutex};

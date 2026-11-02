@@ -2065,6 +2065,24 @@ void BufferCache<P>::DownloadBuffersMemory(std::span<const BufferId> buffer_ids)
 }
 
 template <class P>
+void BufferCache<P>::BeginDownloadBatch() {
+    download_batch = true;
+}
+
+template <class P>
+void BufferCache<P>::EndDownloadBatch() {
+    download_batch = false;
+    if (batched_downloads.empty()) {
+        return;
+    }
+    runtime.Finish();
+    for (const BatchedDownload& download : batched_downloads) {
+        device_memory.WriteBlockUnsafe(download.device_addr, download.staging, download.size);
+    }
+    batched_downloads.clear();
+}
+
+template <class P>
 void BufferCache<P>::DownloadBufferMemory(Buffer& buffer, DAddr device_addr, u64 size) {
     boost::container::small_vector<BufferCopy, 1> copies;
     u64 total_size_bytes = 0;
@@ -2105,6 +2123,14 @@ void BufferCache<P>::DownloadBufferMemory(Buffer& buffer, DAddr device_addr, u64
             buffer.MarkUsage(copy.src_offset, copy.size);
         }
         runtime.CopyBuffer(download_staging.buffer, buffer, copies_span, true);
+        if (download_batch) {
+            for (const BufferCopy& copy : copies) {
+                batched_downloads.push_back({buffer.CpuAddr() + copy.src_offset,
+                                             mapped_memory + (copy.dst_offset - download_staging.offset),
+                                             copy.size});
+            }
+            return;
+        }
         runtime.Finish();
         for (const BufferCopy& copy : copies) {
             const DAddr copy_device_addr = buffer.CpuAddr() + copy.src_offset;

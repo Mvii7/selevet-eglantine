@@ -6,10 +6,12 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <deque>
 #include <filesystem>
+#include <set>
 #include <string>
 #include <fmt/format.h>
 
@@ -845,6 +847,62 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
     }
 }
 
+namespace {
+// EDEN_NX2_CMD_STATS: every 10 seconds, log how often command entries on GPU-written pages stop the
+// front thread (kind 0), the time spent waiting for the back (kind 1) and the downloads of
+// GPU-written command words (kind 2).
+void CommandStats(int kind, std::chrono::steady_clock::duration time = {}, GPUVAddr address = 0,
+                  size_t size = 0) {
+    static const bool enabled = std::getenv("EDEN_NX2_CMD_STATS") != nullptr;
+    if (!enabled) {
+        return;
+    }
+    static u64 waits{};
+    static u64 flushes{};
+    static u64 flush_bytes{};
+    static u64 batched{};
+    static std::chrono::steady_clock::duration drain_time{};
+    static std::chrono::steady_clock::duration flush_time{};
+    static std::chrono::steady_clock::duration longest_flush{};
+    static std::set<GPUVAddr> flush_addresses;
+    static auto window_start = std::chrono::steady_clock::now();
+    switch (kind) {
+    case 0:
+        ++waits;
+        break;
+    case 1:
+        drain_time += time;
+        break;
+    case 3:
+        batched += size;
+        break;
+    default:
+        ++flushes;
+        flush_bytes += size;
+        flush_time += time;
+        longest_flush = (std::max)(longest_flush, time);
+        if (flush_addresses.size() < 4096) {
+            flush_addresses.insert(address);
+        }
+        break;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - window_start < std::chrono::seconds{10}) {
+        return;
+    }
+    const auto ms = [](auto d) { return std::chrono::duration<double, std::milli>(d).count(); };
+    LOG_INFO(HW_GPU,
+             "nx2 cmd stats 10s: {} waits ({:.0f} ms draining), {} downloads of {} distinct entries "
+             "({} KiB, {:.0f} ms, longest {:.2f} ms), {} more entries flushed along",
+             waits, ms(drain_time), flushes, flush_addresses.size(), flush_bytes / 1024,
+             ms(flush_time), ms(longest_flush), batched);
+    waits = flushes = flush_bytes = batched = 0;
+    drain_time = flush_time = longest_flush = {};
+    flush_addresses.clear();
+    window_start = now;
+}
+} // Anonymous namespace
+
 void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
     // Title 1 runs small command lists its culling dispatches fill in each frame. Accurate GPU
     // mode reads every command list through the caches (safe reads); here only the ones on pages
@@ -876,7 +934,16 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
             return value == nullptr || value[0] != '0';
         }();
         constexpr GPUVAddr page_mask = (GPUVAddr{1} << Nx2WrittenPageBits) - 1;
+        // EDEN_NX2_COMMAND_HOT_ENTRY=1: wait only for entries the GPU has rewritten, not every entry
+        // on a hot page. Title 4 waited ~10x less often but longer each time: 30 fps against 34.
+        static const bool hot_entries = [] {
+            const char* value = std::getenv("EDEN_NX2_COMMAND_HOT_ENTRY");
+            return value != nullptr && value[0] == '1';
+        }();
         const auto hot = [&] {
+            if (hot_entries) {
+                return Nx2IsHotCommandEntry(address);
+            }
             for (GPUVAddr page = address & ~page_mask; page < address + size; page += page_mask + 1) {
                 if (const auto device = memory_manager.GpuToCpuAddress(page);
                     device && Nx2IsHotCommandPage(*device)) {
@@ -885,11 +952,15 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
             }
             return false;
         };
-        if (!always_drain && hot_pages && !hot()) {
+        // EDEN_NX2_COMMAND_LAG=1: never wait here. The first frame's words stay in use until the back's
+        // flush lands, so draws can use GPU-written parameters a frame late.
+        static const bool lag = std::getenv("EDEN_NX2_COMMAND_LAG") != nullptr;
+        if (!always_drain && hot_pages && (lag || !hot())) {
             split.Defer([memory = &memory_manager, address, size] {
                 if (!memory->IsMemoryDirty(address, size, VideoCommon::CacheType::BufferCache)) {
                     return;
                 }
+                Nx2MarkHotCommandEntry(address);
                 for (GPUVAddr page = address & ~page_mask; page < address + size; page += page_mask + 1) {
                     if (const auto device = memory->GpuToCpuAddress(page)) {
                         Nx2MarkHotCommandPage(*device);
@@ -899,7 +970,10 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
             });
             return;
         }
+        CommandStats(0);
+        const auto drain_start = std::chrono::steady_clock::now();
         split.Drain(VideoCommon::GpuSplit::DrainSite::Commands);
+        CommandStats(1, std::chrono::steady_clock::now() - drain_start);
     }
     if (!written()) {
         return;
@@ -915,9 +989,39 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
                      checks, flushes);
         }
     }
-    if (dirty) {
-        memory_manager.FlushRegion(address, size, VideoCommon::CacheType::BufferCache);
+    if (!dirty) {
+        return;
     }
+    const auto flush_start = std::chrono::steady_clock::now();
+    // Each flush waits for the GPU, and title 4 reads ~80 GPU-written entries a frame, most written
+    // together before the first is read. Flush every other entry that needed one before and is
+    // dirty now in the same wait. EDEN_NX2_CMD_BATCH=0 flushes one entry per wait.
+    static const bool batch = [] {
+        const char* value = std::getenv("EDEN_NX2_CMD_BATCH");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (!batch || rasterizer == nullptr) {
+        memory_manager.FlushRegion(address, size, VideoCommon::CacheType::BufferCache);
+        CommandStats(2, std::chrono::steady_clock::now() - flush_start, address, size);
+        return;
+    }
+    Nx2MarkHotCommandEntry(address);
+    if (flushed_command_entries.size() < 1024) {
+        flushed_command_entries.emplace(address, size);
+    }
+    rasterizer->BeginFlushBatch();
+    memory_manager.FlushRegion(address, size, VideoCommon::CacheType::BufferCache);
+    size_t extra = 0;
+    for (const auto& [other_address, other_size] : flushed_command_entries) {
+        if (other_address != address &&
+            memory_manager.IsMemoryDirty(other_address, other_size, VideoCommon::CacheType::BufferCache)) {
+            memory_manager.FlushRegion(other_address, other_size, VideoCommon::CacheType::BufferCache);
+            ++extra;
+        }
+    }
+    rasterizer->EndFlushBatch();
+    CommandStats(2, std::chrono::steady_clock::now() - flush_start, address, size);
+    CommandStats(3, {}, 0, extra);
 }
 
 void DmaPusher::ReportUnboundSubchannel() {

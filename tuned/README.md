@@ -97,6 +97,10 @@ The source now also includes the changes from [Djihads80/Eglantine build-104](ht
 
 This source sends work to the host GPU every 128 draws instead of every 4096 (`EDEN_NX2_FLUSH_DRAWS`), skips waits on semaphores already met in memory (`EDEN_NX2_ACQUIRE_PEEK=0` restores them), runs at high process priority (`EDEN_NX2_HIGH_PRIORITY=0` turns that off) and uses a profile retrained on Mario Kart World. The semaphore changes and the benchmark logging (`EDEN_BENCH_LOG`, `EDEN_TAS_AUTOSTART`) come from [shintasku/selevet-eglantine-linux](https://github.com/shintasku/selevet-eglantine-linux).
 
+## Performance build 2
+
+This source fetches GPU-written command lists in one batch per GPU wait instead of one wait each (`EDEN_NX2_CMD_BATCH=0` restores that), and skips the wait for a semaphore when a release that meets it is already queued for the split GPU thread (`EDEN_NX2_ACQUIRE_QUEUED=0` restores that). The release turns on `EDEN_NX2_QMD_ACQUIRE_SKIP=1` in `nx2_switches.txt`. Changing the memory layout now restarts the emulated system. `EDEN_NX2_CMD_STATS=1` logs the GPU waits every 10 seconds, and `EDEN_NX2_SHADOW_SKIP=N` (off) redraws shadow maps every N frames.
+
 ## License and AI disclosure
 
 GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.

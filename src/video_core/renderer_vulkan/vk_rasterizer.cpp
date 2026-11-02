@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <tuple>
+#include <atomic>
 #include <set>
 #include <fstream>
 #include <mutex>
@@ -506,6 +507,57 @@ void TraceWindowTarget(const Tegra::Engines::Maxwell3D& maxwell3d, Tegra::Memory
         }
     }
 }
+
+// EDEN_NX2_SHADOW_SKIP=N: redraw depth-only passes into square depth targets (shadow maps) only
+// every N frames per target; in between the target keeps its last contents. Off when unset or
+// below 2. EDEN_NX2_SHADOW_MIN=<size> sets the smallest side counted (default 1024).
+std::atomic<u64> g_shadow_frame{0};
+
+bool SkipShadowPass(const Tegra::Engines::Maxwell3D& maxwell3d) {
+    static const u32 every = [] {
+        const char* value = std::getenv("EDEN_NX2_SHADOW_SKIP");
+        return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 0u;
+    }();
+    static const u32 min_size = [] {
+        const char* value = std::getenv("EDEN_NX2_SHADOW_MIN");
+        return value ? static_cast<u32>(std::strtoul(value, nullptr, 10)) : 1024u;
+    }();
+    if (every < 2) {
+        return false;
+    }
+    const auto& regs = maxwell3d.regs;
+    if (!regs.zeta_enable) {
+        return false;
+    }
+    const bool depth_only = regs.rt_control.count == 0 || regs.color_mask[0].raw == 0;
+    if (!depth_only) {
+        return false;
+    }
+    const u32 width = regs.zeta_size.width;
+    const u32 height = regs.zeta_size.height;
+    const GPUVAddr address = regs.zeta.Address();
+    static std::set<std::tuple<GPUVAddr, u32, u32>> seen;
+    const bool counted = width == height && width >= min_size;
+    if (seen.size() < 48 && seen.emplace(address, width, height).second) {
+        LOG_INFO(HW_GPU, "nx2 shadow skip: depth-only target {:#x} {}x{} layers {} {}", address,
+                 width, height, regs.zeta_size.depth.Value(), counted ? "(redrawn every N frames)" : "(left alone)");
+    }
+    if (!counted) {
+        return false;
+    }
+    const u64 frame = g_shadow_frame.load(std::memory_order_relaxed);
+    static std::unordered_map<GPUVAddr, u64> last_drawn;
+    auto [entry, inserted] = last_drawn.try_emplace(address, frame);
+    if (inserted || entry->second == frame || frame - entry->second >= every) {
+        entry->second = frame;
+        return false;
+    }
+    static u64 skipped{};
+    if (++skipped % 20000 == 0) {
+        LOG_INFO(HW_GPU, "nx2 shadow skip: {} depth-only draws/clears skipped", skipped);
+    }
+    return true;
+}
 } // Anonymous namespace
 
 void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
@@ -619,6 +671,10 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
                      regs.blend.enable[0], seen.size());
         }
     }
+    if (SkipShadowPass(*maxwell3d)) {
+        gpu.TickWork();
+        return;
+    }
     PrepareDraw(is_indexed, [this, is_indexed, instance_count] {
         const auto& draw_state = maxwell3d->draw_manager.draw_state;
         const u32 num_instances{instance_count};
@@ -654,6 +710,10 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
 void RasterizerVulkan::DrawIndirect() {
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::Draw};
     const auto& params = maxwell3d->draw_manager.indirect_state;
+    if (SkipShadowPass(*maxwell3d)) {
+        gpu.TickWork();
+        return;
+    }
     buffer_cache.SetDrawIndirect(&params);
     PrepareDraw(params.is_indexed, [this, &params] {
         const auto indirect_buffer = buffer_cache.GetDrawIndirectBuffer();
@@ -776,6 +836,9 @@ void RasterizerVulkan::Clear(u32 layer_count) {
     const bool use_depth = regs.clear_surface.Z;
     const bool use_stencil = regs.clear_surface.S;
     if (!use_color && !use_depth && !use_stencil) {
+        return;
+    }
+    if (!use_color && SkipShadowPass(*maxwell3d)) {
         return;
     }
 
@@ -1074,6 +1137,16 @@ void RasterizerVulkan::FlushRegion(DAddr addr, u64 size, VideoCommon::CacheType 
     }
 }
 
+void RasterizerVulkan::BeginFlushBatch() {
+    std::scoped_lock lock{buffer_cache.mutex};
+    buffer_cache.BeginDownloadBatch();
+}
+
+void RasterizerVulkan::EndFlushBatch() {
+    std::scoped_lock lock{buffer_cache.mutex};
+    buffer_cache.EndDownloadBatch();
+}
+
 bool RasterizerVulkan::MustFlushRegion(DAddr addr, u64 size, VideoCommon::CacheType which) {
     if ((True(which & VideoCommon::CacheType::BufferCache))) {
         std::scoped_lock lock{buffer_cache.mutex};
@@ -1324,6 +1397,7 @@ void RasterizerVulkan::FlushCommands() {
 
 void RasterizerVulkan::TickFrame() {
     draw_counter = 0;
+    g_shadow_frame.fetch_add(1, std::memory_order_relaxed);
     guest_descriptor_queue.TickFrame();
     compute_pass_descriptor_queue.TickFrame();
     descriptor_buffer_ring.TickFrame();

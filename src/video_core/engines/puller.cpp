@@ -4,8 +4,14 @@
 // SPDX-FileCopyrightText: 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
+#include <optional>
+#include <string>
+#include <vector>
+#include <unordered_map>
 
 #include "common/assert.h"
 #include "common/logging.h"
@@ -68,6 +74,29 @@ bool PeekAcquire() {
         return value == nullptr || value[0] != '0';
     }();
     return enabled && VideoCommon::GpuSplit::Get().Active();
+}
+
+// Releases queued for the split's back (GpuSplit::NoteQueuedRelease). Title 4 drained the back at
+// ~40% of its front's time on acquires the 3D engine's queued releases meet.
+// EDEN_NX2_ACQUIRE_QUEUED=0 drains as before.
+void NoteQueuedRelease(DmaPusher& dma_pusher, GPUVAddr address, u32 payload) {
+    if (!Nx2AcquireQueuedEnabled() || !PeekAcquire()) {
+        return;
+    }
+    if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(address)) {
+        VideoCommon::GpuSplit::Get().NoteQueuedRelease(*device, payload);
+    }
+}
+
+std::optional<u32> QueuedReleasePayload(DmaPusher& dma_pusher, GPUVAddr address) {
+    if (!Nx2AcquireQueuedEnabled() || !PeekAcquire()) {
+        return std::nullopt;
+    }
+    const auto device = dma_pusher.memory_manager.GpuToCpuAddress(address);
+    if (!device) {
+        return std::nullopt;
+    }
+    return VideoCommon::GpuSplit::Get().QueuedRelease(*device);
 }
 
 } // Anonymous namespace
@@ -244,6 +273,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         OnBack([rasterizer = dma_pusher.rasterizer, sequence_address, properties, payload] {
             rasterizer->Query(sequence_address, VideoCommon::QueryType::Payload, properties, payload, 0);
         });
+        NoteQueuedRelease(dma_pusher, sequence_address, payload);
     } else if (g_nx2_ampere) {
         // Switch 2 waits on semaphores the CPU (or another channel) releases, e.g. once it has
         // written the commands this channel runs next: suspend the channel until the value is
@@ -264,8 +294,61 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         if (PeekAcquire() && acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address))) {
             return;
         }
+        static u64 acquires_queued{};
+        static u64 acquires_drained{};
+        if (const auto queued = QueuedReleasePayload(dma_pusher, acquire.address);
+            queued && acquire.Matches(*queued)) {
+            ++acquires_queued;
+            return;
+        }
+        // Where unmet acquires end up (EDEN_NX2_CMD_STATS logs it): met once the back caught up,
+        // met after the fences, or suspended; and how many are on words compute QMDs release.
+        static u64 acquires_qmd{};
+        static u64 acquires_after_drain{};
+        static u64 acquires_after_fences{};
+        static std::chrono::steady_clock::duration acquire_drain_time{};
+        static std::unordered_map<DAddr, u64> acquire_addresses;
+        static const bool acquire_stats = std::getenv("EDEN_NX2_CMD_STATS") != nullptr;
+        const auto acquire_device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address);
+        ++acquires_drained;
+        if (acquire_stats) {
+            acquires_qmd += acquire_device && Nx2IsQmdReleaseTarget(*acquire_device) ? 1 : 0;
+            if (acquire_device && acquire_addresses.size() < 4096) {
+                ++acquire_addresses[*acquire_device];
+            }
+            if (acquires_drained % 5000 == 0) {
+                std::vector<std::pair<u64, DAddr>> top;
+                for (const auto& [device, count] : acquire_addresses) {
+                    top.emplace_back(count, device);
+                }
+                std::sort(top.rbegin(), top.rend());
+                std::string list;
+                for (size_t i = 0; i < top.size() && i < 6; ++i) {
+                    list += fmt::format(" {:#x}x{}", top[i].second, top[i].first);
+                }
+                LOG_INFO(HW_GPU,
+                         "Unmet acquires: {} met by queued releases, {} drained ({:.0f} ms), {} on "
+                         "QMD release words, {} met after the drain, {} after the fences; {} "
+                         "words:{}",
+                         acquires_queued, acquires_drained,
+                         std::chrono::duration<double, std::milli>(acquire_drain_time).count(),
+                         acquires_qmd, acquires_after_drain, acquires_after_fences,
+                         acquire_addresses.size(), list);
+            }
+        }
+        // EDEN_NX2_QMD_ACQUIRE_SKIP=1: an acquire on a word compute QMDs release waits for GPU work;
+        // the back and the host queue run that work first in order, so do not wait here.
+        if (static const bool qmd_skip = std::getenv("EDEN_NX2_QMD_ACQUIRE_SKIP") != nullptr;
+            qmd_skip && PeekAcquire()) {
+            if (acquire_device && Nx2IsQmdReleaseTarget(*acquire_device)) {
+                return;
+            }
+        }
+        const auto drain_start = std::chrono::steady_clock::now();
         DrainBack();
+        acquire_drain_time += std::chrono::steady_clock::now() - drain_start;
         if (acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
+            ++acquires_after_drain;
             return;
         }
         // Registered before the fences run, so a release among them that meets the value counts
@@ -279,6 +362,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             pending_acquire = acquire;
             VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireWaits, 1);
         } else {
+            ++acquires_after_fences;
             waiters.Remove(this);
         }
     } else {
@@ -337,6 +421,7 @@ void Puller::ProcessSemaphoreRelease(DmaPusher& dma_pusher) {
         rasterizer->Query(sequence_address, VideoCommon::QueryType::Payload,
                           VideoCommon::QueryPropertiesFlags::IsAFence, payload, 0);
     });
+    NoteQueuedRelease(dma_pusher, sequence_address, payload);
 }
 
 void Puller::ProcessSemaphoreAcquire(DmaPusher& dma_pusher) {
@@ -366,6 +451,7 @@ void Puller::ProcessSemaphoreExecute(DmaPusher& dma_pusher, u32 argument) {
             rasterizer->Query(address, VideoCommon::QueryType::Payload,
                               VideoCommon::QueryPropertiesFlags::IsAFence, payload, 0);
         });
+        NoteQueuedRelease(dma_pusher, address, payload);
         return;
     }
     // Acquires: check once after flushing pending fences; never block the GPU thread on them.

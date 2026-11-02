@@ -9,7 +9,9 @@
 #include <array>
 #include <condition_variable>
 #include <optional>
+#include <set>
 #include <span>
+#include <utility>
 #include <vector>
 #include <boost/container/small_vector.hpp>
 #include <queue>
@@ -255,6 +257,9 @@ public:
     std::condition_variable sync_cv;
 
     VideoCore::RasterizerInterface* rasterizer = nullptr;
+
+    /// GPU-written command entries that needed a flush (FlushGpuWrittenCommands batches them).
+    std::set<std::pair<GPUVAddr, size_t>> flushed_command_entries;
 
     const bool ib_enable : 1 = true; ///< IB mode enabled
     bool dma_increment_once : 1 = false;

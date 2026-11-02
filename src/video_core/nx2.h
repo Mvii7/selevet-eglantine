@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdlib>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -347,6 +348,90 @@ inline bool Nx2SparseUnwritten(u64 gpu_address, u64 size) {
             return false;
         }
     }
+    return true;
+}
+
+/// Device addresses compute QMDs have released to (insert-only, any thread). Acquires on them wait
+/// for GPU work, which the host queue orders anyway (EDEN_NX2_QMD_ACQUIRE_SKIP). From
+/// shintasku/selevet-eglantine-linux.
+inline std::array<std::atomic<u64>, 4096> g_nx2_qmd_release_targets{};
+
+inline size_t Nx2QmdTargetSlot(u64 device) {
+    return static_cast<size_t>(((device >> 2) * 0x9E3779B97F4A7C15ULL) >> 52);
+}
+
+inline void Nx2NoteQmdReleaseTarget(u64 device) {
+    const u64 key = device + 1;
+    for (size_t i = 0, slot = Nx2QmdTargetSlot(device); i < 64; ++i, slot = (slot + 1) % 4096) {
+        u64 current = g_nx2_qmd_release_targets[slot].load(std::memory_order_relaxed);
+        if (current == key) {
+            return;
+        }
+        if (current == 0 && g_nx2_qmd_release_targets[slot].compare_exchange_strong(current, key)) {
+            return;
+        }
+        if (current == key) {
+            return;
+        }
+    }
+}
+
+[[nodiscard]] inline bool Nx2IsQmdReleaseTarget(u64 device) {
+    const u64 key = device + 1;
+    for (size_t i = 0, slot = Nx2QmdTargetSlot(device); i < 64; ++i, slot = (slot + 1) % 4096) {
+        const u64 current = g_nx2_qmd_release_targets[slot].load(std::memory_order_relaxed);
+        if (current == key) {
+            return true;
+        }
+        if (current == 0) {
+            return false;
+        }
+    }
+    return false;
+}
+
+/// Whether acquires a release queued for the split's back meets skip the drain
+/// (GpuSplit::NoteQueuedRelease). EDEN_NX2_ACQUIRE_QUEUED=0 turns it off.
+[[nodiscard]] inline bool Nx2AcquireQueuedEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_ACQUIRE_QUEUED");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled;
+}
+
+/// GPU addresses of command entries the GPU has rewritten (insert-only, any thread). Most entries on
+/// a GPU-written page never are, so the front waits only for these (EDEN_NX2_COMMAND_HOT_ENTRY).
+inline std::array<std::atomic<u64>, 4096> g_nx2_hot_command_entries{};
+
+inline void Nx2MarkHotCommandEntry(u64 gpu_address) {
+    const u64 key = gpu_address + 1;
+    for (size_t i = 0, slot = Nx2QmdTargetSlot(gpu_address); i < 64; ++i, slot = (slot + 1) % 4096) {
+        u64 current = g_nx2_hot_command_entries[slot].load(std::memory_order_relaxed);
+        if (current == key) {
+            return;
+        }
+        if (current == 0 && g_nx2_hot_command_entries[slot].compare_exchange_strong(current, key)) {
+            return;
+        }
+        if (current == key) {
+            return;
+        }
+    }
+}
+
+[[nodiscard]] inline bool Nx2IsHotCommandEntry(u64 gpu_address) {
+    const u64 key = gpu_address + 1;
+    for (size_t i = 0, slot = Nx2QmdTargetSlot(gpu_address); i < 64; ++i, slot = (slot + 1) % 4096) {
+        const u64 current = g_nx2_hot_command_entries[slot].load(std::memory_order_relaxed);
+        if (current == key) {
+            return true;
+        }
+        if (current == 0) {
+            return false;
+        }
+    }
+    // The table is full around this slot: wait, as for a hot page.
     return true;
 }
 
