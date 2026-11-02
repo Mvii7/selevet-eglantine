@@ -573,6 +573,7 @@ struct Values {
                                                                true,
                                                                true};
 
+    // Uncompressed, as Selevet had it: build-131's BC3 default darkened Mario Kart World's ground.
     SwitchableSetting<AstcRecompression, true> astc_recompression{linkage,
                                                                   AstcRecompression::Uncompressed,
                                                                   "astc_recompression",

@@ -237,6 +237,7 @@ add_library(video_core STATIC
     shader_cache.h
     shader_environment.cpp
     shader_environment.h
+    shader_handle_program.h
     shader_notify.cpp
     shader_notify.h
     smaa_area_tex.h
@@ -294,6 +295,8 @@ if (ENABLE_LSFG)
         renderer_vulkan/present/frame_gen.h
         renderer_vulkan/present/fsr3_frame_gen.cpp
         renderer_vulkan/present/fsr3_frame_gen.h
+        renderer_vulkan/present/nv_optical_flow_frame_gen.cpp
+        renderer_vulkan/present/nv_optical_flow_frame_gen.h
         renderer_vulkan/present/frame_gen_pacer.cpp
         renderer_vulkan/present/frame_gen_pacer.h
         renderer_vulkan/present/lsfg_alpha.cpp

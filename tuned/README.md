@@ -109,6 +109,10 @@ The CPU translator no longer uses AVX-512, even on CPUs that have it (`EDEN_NX2_
 
 The loader makes the Switch 2 SDK's `nn::vi::detail::DefaultDisplay::QueryVrrSupported` report VRR support, found by its exported name (`EDEN_NX2_REPORT_VRR=0` turns it off). Switch 2 draws skip a pipeline that is still being built instead of waiting for it when asynchronous shaders are on (`EDEN_NX2_ASYNC_SKIP=0`). `EDEN_NX2_VBLANK_ALIGN=1` holds late frames to the next 60 Hz vblank. A debug readback that froze the game once is off by default.
 
+## Performance build 5
+
+Performance build 4 merged with Djihads80/Eglantine build-131: mesh and task shaders (`VK_EXT_mesh_shader`), vi2 native events and display queries, shared device ranges, cold memory hints, the camera session, the NUP loader and its Fire Emblem: Fortune's Weave fixes. NVIDIA optical flow frame generation from anormalhorse's `nvof` branch is a new frame generation choice (RTX 20 series or newer, untested on hardware). Selevet's shader translator is kept, now with build-131's ISBERD/ISBEWR for mesh programs, UPOPC, loop exits to a BSYNC in programs that also return, and absolute-value constant-buffer F2I. Three of build-131's defaults are reverted: ASTC recompression is Uncompressed again (BC3 darkened Mario Kart World's ground), a swap interval above 1 is honoured only once a game keeps it for 120 presents (Mario Kart World switches between 1 and 2 and fell from about 40 to 20 fps), and GPU-written buffers are copied back for Pokemon Pokopia from its program id at load.
+
 ## License and AI disclosure
 
 GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.

@@ -6,8 +6,10 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdlib>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <span>
@@ -21,6 +23,7 @@
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
 VK_DEFINE_HANDLE(VmaAllocator)
+VK_DEFINE_HANDLE(VmaPool)
 
 // Define all features which may be used by the implementation here.
 // Vulkan version in the macro describes the minimum version required for feature availability.
@@ -66,6 +69,7 @@ VK_DEFINE_HANDLE(VmaAllocator)
     FEATURE(EXT, 4444Formats, 4444_FORMATS, format_a4b4g4r4)                                       \
     FEATURE(EXT, IndexTypeUint8, INDEX_TYPE_UINT8, index_type_uint8)                               \
     FEATURE(EXT, LineRasterization, LINE_RASTERIZATION, line_rasterization)                        \
+    FEATURE(EXT, MeshShader, MESH_SHADER, mesh_shader)                                             \
     FEATURE(EXT, PrimitiveTopologyListRestart, PRIMITIVE_TOPOLOGY_LIST_RESTART,                    \
             primitive_topology_list_restart)                                                       \
     FEATURE(EXT, ProvokingVertex, PROVOKING_VERTEX, provoking_vertex)                              \
@@ -74,6 +78,7 @@ VK_DEFINE_HANDLE(VmaAllocator)
     FEATURE(EXT, VertexInputDynamicState, VERTEX_INPUT_DYNAMIC_STATE, vertex_input_dynamic_state)  \
     FEATURE(KHR, Maintenance5, MAINTENANCE_5, maintenance5)                                        \
     FEATURE(KHR, Maintenance6, MAINTENANCE_6, maintenance6)                                        \
+    FEATURE(NV, OpticalFlow, OPTICAL_FLOW, optical_flow)                                           \
     FEATURE(KHR, PipelineExecutableProperties, PIPELINE_EXECUTABLE_PROPERTIES,                     \
             pipeline_executable_properties)                                                        \
     FEATURE(KHR, ShaderQuadControl, SHADER_QUAD_CONTROL, shader_quad_control)                      \
@@ -264,6 +269,17 @@ public:
         return allocator;
     }
 
+    /// Allocations kept out of the default blocks, which then hold images only: churned buffers
+    /// and long-lived sparse pages left holes the texture cache's collector couldn't drain.
+    enum class SeparatePool : u32 {
+        SparsePages,
+        DeviceBuffers,
+    };
+    static constexpr VkDeviceSize SeparatePoolBlockSize = 16ULL << 20;
+
+    /// The pool of that kind for a memory type, created on first use (null if that failed).
+    VmaPool GetSeparatePool(SeparatePool kind, u32 memory_type) const;
+
     /// Returns the logical device.
     const vk::Device& GetLogical() const {
         return logical;
@@ -286,6 +302,21 @@ public:
     /// Returns the main present queue.
     vk::Queue GetPresentQueue() const {
         return present_queue;
+    }
+
+    /// Returns true when VK_NV_optical_flow is enabled and a dedicated optical flow queue exists.
+    bool CanUseOpticalFlow() const {
+        return extensions.optical_flow && has_optical_flow_queue;
+    }
+
+    /// Returns the optical flow queue family index (valid when CanUseOpticalFlow() is true).
+    u32 GetOpticalFlowFamily() const {
+        return optical_flow_family;
+    }
+
+    /// Returns the optical flow queue (valid when CanUseOpticalFlow() is true).
+    vk::Queue GetOpticalFlowQueue() const {
+        return optical_flow_queue;
     }
 
     /// Returns main graphics queue family index.
@@ -634,6 +665,12 @@ FN_MAX_LIMIT_LIST
         return extensions.shader_quad_control && features.shader_quad_control.shaderQuadControl;
     }
 
+    /// Returns true if the device supports task and mesh shaders (VK_EXT_mesh_shader).
+    bool IsExtMeshShaderSupported() const {
+        return extensions.mesh_shader && features.mesh_shader.taskShader &&
+               features.mesh_shader.meshShader;
+    }
+
     /// Returns true if the device supports VK_KHR_image_format_list.
     bool IsKhrImageFormatListSupported() const {
         return extensions.image_format_list || instance_version >= VK_API_VERSION_1_2;
@@ -952,6 +989,11 @@ FN_MAX_LIMIT_LIST
         return 0x00010300U;
     }
 
+    /// Returns true for an integrated GPU (its device-local memory is system memory).
+    bool IsIntegrated() const {
+        return is_integrated;
+    }
+
     /// Returns true when a known debugging tool is attached.
     bool HasDebuggingToolAttached() const {
         return has_renderdoc || has_nsight_graphics || has_radeon_gpu_profiler;
@@ -994,8 +1036,14 @@ FN_MAX_LIMIT_LIST
 
     /// The driver's current memory budget for this process (VK_EXT_memory_budget), in
     /// GetDeviceMemoryUsage() terms: the usage at which the main device-local heap reaches its
-    /// budget. 0 without the extension.
+    /// budget. 0 without the extension. The unused part of the allocator's blocks is not
+    /// subtracted: see GetDeviceMemorySlack().
     u64 GetDeviceMemoryBudget() const;
+
+    /// Memory the allocator holds from the driver in the main device-local heap but has no
+    /// allocation in (the unused part of its blocks). GetDeviceMemoryUsage() does not count it,
+    /// yet the driver does: with the heap at its budget it is not available to new images.
+    u64 GetDeviceMemorySlack() const;
 
     u32 GetSetsPerPool() const {
         return sets_per_pool;
@@ -1180,16 +1228,21 @@ private:
 private:
     VkInstance instance;         ///< Vulkan instance.
     VmaAllocator allocator{};    ///< VMA allocator.
+    mutable std::mutex separate_pools_mutex;
+    mutable std::array<std::array<VmaPool, VK_MAX_MEMORY_TYPES>, 2> separate_pools{};
     vk::DeviceDispatch dld;      ///< Device function pointers.
     vk::PhysicalDevice physical; ///< Physical device.
     vk::Device logical;          ///< Logical device.
     vk::Queue graphics_queue;    ///< Main graphics queue.
     vk::Queue present_queue;     ///< Main present queue.
+    vk::Queue optical_flow_queue; ///< Optical flow queue (VK_NV_optical_flow), if any.
     vk::PipelineCache static_pipeline_cache;
     bool owns_static_pipeline_cache{};
     u32 instance_version{};      ///< Vulkan instance version.
     u32 graphics_family{};       ///< Main graphics queue family index.
     u32 present_family{};        ///< Main present queue family index.
+    u32 optical_flow_family{};   ///< Optical flow queue family index (VK_NV_optical_flow).
+    bool has_optical_flow_queue{}; ///< True when a dedicated optical flow queue family exists.
     bool graphics_family_sparse_binding{};
 
     struct Extensions {
