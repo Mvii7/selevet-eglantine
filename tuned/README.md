@@ -105,6 +105,10 @@ This source fetches GPU-written command lists in one batch per GPU wait instead 
 
 The CPU translator no longer uses AVX-512, even on CPUs that have it (`EDEN_NX2_AVX512=1` turns it back on). The upscaler fallback also looks for its images at constant buffer 0 +0x60 and +0x70, where Donkey Kong Bananza version 458752 keeps them. The video decoder only marks a picture from the final input as the end of a video. The release no longer turns on `EDEN_NX2_QMD_ACQUIRE_SKIP`.
 
+## Performance build 4
+
+The loader makes the Switch 2 SDK's `nn::vi::detail::DefaultDisplay::QueryVrrSupported` report VRR support, found by its exported name (`EDEN_NX2_REPORT_VRR=0` turns it off). Switch 2 draws skip a pipeline that is still being built instead of waiting for it when asynchronous shaders are on (`EDEN_NX2_ASYNC_SKIP=0`). `EDEN_NX2_VBLANK_ALIGN=1` holds late frames to the next 60 Hz vblank. A debug readback that froze the game once is off by default.
+
 ## License and AI disclosure
 
 GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.

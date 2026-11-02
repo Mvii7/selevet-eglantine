@@ -1578,6 +1578,26 @@ private:
         const auto interval =
             std::chrono::nanoseconds{100'000'000'000LL / present_hz / Settings::SpeedLimit()};
         const auto now = std::chrono::steady_clock::now();
+        // EDEN_NX2_VBLANK_ALIGN=1: a late frame waits for the next vblank, as on a fixed-rate
+        // console display. Off: the SDK now reports VRR (nso.cpp), and title 4 then times its own
+        // frames, which kept its speed steady where aligning alone did not.
+        static const bool align = [] {
+            const char* value = std::getenv("EDEN_NX2_VBLANK_ALIGN");
+            return value != nullptr && value[0] == '1';
+        }();
+        if (align && m_next_vblank != std::chrono::steady_clock::time_point{}) {
+            // Up to 2 ms late still counts as one vblank: present now rather than lose a frame.
+            if (now > m_next_vblank && now - m_next_vblank < std::chrono::milliseconds{2}) {
+                m_next_vblank = now + interval;
+                return;
+            }
+            if (now > m_next_vblank) {
+                m_next_vblank += ((now - m_next_vblank) / interval + 1) * interval;
+            }
+            std::this_thread::sleep_until(m_next_vblank);
+            m_next_vblank += interval;
+            return;
+        }
         if (now > m_next_vblank + interval) {
             // Running slower than 60 fps: show at once and don't bank the lost time.
             m_next_vblank = now;

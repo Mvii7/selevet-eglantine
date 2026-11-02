@@ -120,6 +120,9 @@ public:
 
     [[nodiscard]] ComputePipeline* CurrentComputePipeline();
 
+    /// Whether a native draw whose pipeline is still being built is skipped instead of waited for.
+    [[nodiscard]] bool SkipUnbuiltNativeDraw(const GraphicsPipeline* pipeline) const noexcept;
+
     void LoadDiskResources(u64 title_id, std::stop_token stop_loading,
                            const VideoCore::DiskResourceLoadCallback& callback);
 

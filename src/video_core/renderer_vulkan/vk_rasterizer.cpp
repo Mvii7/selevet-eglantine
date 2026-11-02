@@ -364,6 +364,10 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
             return;
         }
     }
+    if (pipeline_cache.SkipUnbuiltNativeDraw(pipeline)) {
+        submitted = true;
+        return;
+    }
     // update engine as channel may be different.
     pipeline->SetEngine(maxwell3d, gpu_memory);
     if (Profile::Scope scope{Profile::Zone::Configure}; !pipeline->Configure(is_indexed)) {

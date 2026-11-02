@@ -950,6 +950,19 @@ bool PipelineCache::CanSkipDraw() const noexcept {
     return true;
 }
 
+// Native (Switch 2) draws wait for their pipeline above, and in title 4 those waits reached ~3 s in
+// 10 s of new scenery (255 ms at once): the game then runs slow and catches up. With asynchronous
+// shaders on, skip the draws CanSkipDraw allows while the pipeline builds, as for other titles.
+// EDEN_NX2_ASYNC_SKIP=0 waits as before.
+bool PipelineCache::SkipUnbuiltNativeDraw(const GraphicsPipeline* pipeline) const noexcept {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_ASYNC_SKIP");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled && use_asynchronous_shaders && !pipeline->IsBuilt() &&
+           maxwell3d->GetNativeMacroEngine().native_turing && CanSkipDraw();
+}
+
 std::unique_ptr<GraphicsPipeline> PipelineCache::BuildNewGraphicsPipeline() {
     if (CanTranslateAsynchronously()) {
         // With an earlier pipeline's shaders only the driver compile is left, and it goes to the
