@@ -200,7 +200,7 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
             SignalCommand(state, next.fence, next.block);
         }
         if (split.Active()) {
-            split.Drain();
+            split.Drain(VideoCommon::GpuSplit::DrainSite::EndOfBatch);
         }
     });
 }

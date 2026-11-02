@@ -199,9 +199,12 @@ void Tas::UpdateThread() {
     }
 
     if (!is_running) {
-        ClearInput();
+        if (!input_cleared) {
+            ClearInput();
+        }
         return;
     }
+    input_cleared = false;
     if (current_command < script_length) {
         LOG_DEBUG(Input, "Playing TAS {}/{}", current_command, script_length);
         const size_t frame = current_command++;
@@ -216,15 +219,31 @@ void Tas::UpdateThread() {
                 .port = player_index,
                 .pad = 0,
             };
+            const bool full = !applied_valid[player_index];
+            const TASCommand& last = applied[player_index];
+            const u64 changed = full ? ~u64{0} : (command.buttons ^ last.buttons);
             for (std::size_t i = 0; i < sizeof(command.buttons) * 8; ++i) {
+                if ((changed & (1LLU << i)) == 0) {
+                    continue;
+                }
                 const bool button_status = (command.buttons & (1LLU << i)) != 0;
                 const int button = static_cast<int>(i);
                 SetButton(identifier, button, button_status);
             }
-            SetTasAxis(identifier, TasAxis::StickX, command.l_axis.x);
-            SetTasAxis(identifier, TasAxis::StickY, command.l_axis.y);
-            SetTasAxis(identifier, TasAxis::SubstickX, command.r_axis.x);
-            SetTasAxis(identifier, TasAxis::SubstickY, command.r_axis.y);
+            if (full || command.l_axis.x != last.l_axis.x) {
+                SetTasAxis(identifier, TasAxis::StickX, command.l_axis.x);
+            }
+            if (full || command.l_axis.y != last.l_axis.y) {
+                SetTasAxis(identifier, TasAxis::StickY, command.l_axis.y);
+            }
+            if (full || command.r_axis.x != last.r_axis.x) {
+                SetTasAxis(identifier, TasAxis::SubstickX, command.r_axis.x);
+            }
+            if (full || command.r_axis.y != last.r_axis.y) {
+                SetTasAxis(identifier, TasAxis::SubstickY, command.r_axis.y);
+            }
+            applied[player_index] = command;
+            applied_valid[player_index] = true;
         }
     } else {
         is_running = Settings::values.tas_loop.GetValue();
@@ -237,6 +256,8 @@ void Tas::UpdateThread() {
 void Tas::ClearInput() {
     ResetButtonState();
     ResetAnalogState();
+    applied_valid.fill(false);
+    input_cleared = true;
 }
 
 TasAnalog Tas::ReadCommandAxis(const std::string& line) const {

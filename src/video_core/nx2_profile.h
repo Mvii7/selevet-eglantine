@@ -85,6 +85,14 @@ struct ThreadData {
 
 inline thread_local ThreadData t_data;
 
+#ifdef EGLANTINE_NO_GPU_PROFILE
+class Scope {
+public:
+    explicit Scope(Zone) {}
+    Scope(const Scope&) = delete;
+    Scope& operator=(const Scope&) = delete;
+};
+#else
 class Scope {
 public:
     explicit Scope(Zone zone_) : zone{zone_}, enabled{Enabled()} {
@@ -117,6 +125,7 @@ private:
     u64 start{};
     u64 parent_child_ns{};
 };
+#endif
 
 /// Amounts counted on the GPU thread, logged per second with the zones.
 enum class Counter : u32 {

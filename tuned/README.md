@@ -93,6 +93,10 @@ The 30FPS PATCH release limits the game to 30 fps. It uses this source with `tun
 
 The source now also includes the changes from [Djihads80/Eglantine build-104](https://github.com/Djihads80/Eglantine/releases/tag/build-104). Sparse texture tile mapping (`nx2:gpu 216`) is included but off by default, because it ran about 15-20% slower on an RTX 3050. `EDEN_NX2_SPARSE_REMAP=1` in `nx2_switches.txt` turns it on.
 
+## Performance build
+
+This source sends work to the host GPU every 128 draws instead of every 4096 (`EDEN_NX2_FLUSH_DRAWS`), skips waits on semaphores already met in memory (`EDEN_NX2_ACQUIRE_PEEK=0` restores them), runs at high process priority (`EDEN_NX2_HIGH_PRIORITY=0` turns that off) and uses a profile retrained on Mario Kart World. The semaphore changes and the benchmark logging (`EDEN_BENCH_LOG`, `EDEN_TAS_AUTOSTART`) come from [shintasku/selevet-eglantine-linux](https://github.com/shintasku/selevet-eglantine-linux).
+
 ## License and AI disclosure
 
 GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.

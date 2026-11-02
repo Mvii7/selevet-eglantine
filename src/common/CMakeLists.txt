@@ -68,6 +68,8 @@ add_library(
     hex_util.cpp
     hex_util.h
     host_memory.cpp
+    nx2_ram_trim.cpp
+    nx2_ram_trim.h
     host_memory.h
     input.h
     intrusive_red_black_tree.h

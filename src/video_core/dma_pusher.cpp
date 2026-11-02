@@ -420,7 +420,7 @@ bool DmaPusher::Step() {
                                              return memory_manager.GpuToCpuAddress(page);
                                          }))) {
                     if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
-                        split.Drain();
+                        split.Drain(VideoCommon::GpuSplit::DrainSite::MacroParameters);
                     }
                     const GPUVAddr address = dma_state.dma_get;
                     const size_t bytes = words * sizeof(u32);
@@ -439,7 +439,7 @@ bool DmaPusher::Step() {
                 } else if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
                     // The caches behind IsMemoryDirty belong to the split's back thread.
                     if (g_nx2_ampere.load(std::memory_order_relaxed)) {
-                        split.Drain();
+                        split.Drain(VideoCommon::GpuSplit::DrainSite::MacroParameters);
                         engine_state->current_dirty = memory_manager.IsMemoryDirty(
                             dma_state.dma_get, words * sizeof(u32));
                     } else {
@@ -532,7 +532,7 @@ bool DmaPusher::Step() {
     }
 
     if (signal_sync) {
-        VideoCommon::GpuSplit::Get().Drain();
+        VideoCommon::GpuSplit::Get().Drain(VideoCommon::GpuSplit::DrainSite::Sync);
         rasterizer->SignalFence([this]() {
             std::scoped_lock lk(sync_mutex);
             synced = true;
@@ -868,12 +868,54 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
         if (!always_drain && !written()) {
             return;
         }
-        split.Drain();
+        // Few entries on written pages are ever dirty (2-3% in title 1). Until one has been, check
+        // it on the back without stopping the front; the first time costs one stale frame, then
+        // the page waits as before. EDEN_NX2_COMMAND_HOT=0 waits for every written page.
+        static const bool hot_pages = [] {
+            const char* value = std::getenv("EDEN_NX2_COMMAND_HOT");
+            return value == nullptr || value[0] != '0';
+        }();
+        constexpr GPUVAddr page_mask = (GPUVAddr{1} << Nx2WrittenPageBits) - 1;
+        const auto hot = [&] {
+            for (GPUVAddr page = address & ~page_mask; page < address + size; page += page_mask + 1) {
+                if (const auto device = memory_manager.GpuToCpuAddress(page);
+                    device && Nx2IsHotCommandPage(*device)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        if (!always_drain && hot_pages && !hot()) {
+            split.Defer([memory = &memory_manager, address, size] {
+                if (!memory->IsMemoryDirty(address, size, VideoCommon::CacheType::BufferCache)) {
+                    return;
+                }
+                for (GPUVAddr page = address & ~page_mask; page < address + size; page += page_mask + 1) {
+                    if (const auto device = memory->GpuToCpuAddress(page)) {
+                        Nx2MarkHotCommandPage(*device);
+                    }
+                }
+                memory->FlushRegion(address, size, VideoCommon::CacheType::BufferCache);
+            });
+            return;
+        }
+        split.Drain(VideoCommon::GpuSplit::DrainSite::Commands);
     }
     if (!written()) {
         return;
     }
-    if (memory_manager.IsMemoryDirty(address, size, VideoCommon::CacheType::BufferCache)) {
+    const bool dirty = memory_manager.IsMemoryDirty(address, size, VideoCommon::CacheType::BufferCache);
+    if (VideoCommon::Nx2Profile::Enabled()) {
+        static u64 checks{};
+        static u64 flushes{};
+        ++checks;
+        flushes += dirty ? 1 : 0;
+        if (checks % 200000 == 0) {
+            LOG_INFO(HW_GPU, "Command entries on GPU-written pages: {} checked, {} needed a flush",
+                     checks, flushes);
+        }
+    }
+    if (dirty) {
         memory_manager.FlushRegion(address, size, VideoCommon::CacheType::BufferCache);
     }
 }

@@ -195,6 +195,11 @@ private:
     std::array<std::vector<TASCommand>, PLAYER_NUMBER> commands{};
     std::vector<TASCommand> record_commands{};
     size_t current_command{0};
+    // What playback last applied per player, so a frame only reports what changed (setting all 64
+    // buttons every frame ran every input callback on the presenting thread).
+    std::array<TASCommand, PLAYER_NUMBER> applied{};
+    std::array<bool, PLAYER_NUMBER> applied_valid{};
+    bool input_cleared{false};
     TASCommand last_input{}; // only used for recording
 };
 } // namespace InputCommon::TasInput

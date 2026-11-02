@@ -101,8 +101,10 @@ public:
 
     /// Makes what was sent visible to the back.
     void Publish();
+    /// Why the front waits, timed per site while profiling.
+    enum class DrainSite : u32 { Other, Commands, MacroParameters, Sync, SemaphoreAcquire, CpuRead, MacroDmaRead, EndOfBatch, Count };
     /// Waits until the back executed everything sent so far.
-    void Drain();
+    void Drain(DrainSite site = DrainSite::Other);
 
 private:
     enum class Kind : u64 {

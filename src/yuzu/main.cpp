@@ -32,6 +32,7 @@
 #include <cstring>
 #endif
 
+#include "common/nx2_ram_trim.h"
 #include "main_window.h"
 
 #ifdef _WIN32
@@ -158,6 +159,7 @@ int main(int argc, char* argv[]) {
     StartProfileWriter();
 #endif
     LoadNx2Switches(argv[0]);
+    Common::SetNx2HighPriority();
 
 #if YUZU_ROOM
     bool launch_room = false;

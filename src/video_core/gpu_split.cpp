@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <array>
+#include <optional>
+#include <string>
 #include <algorithm>
 #include <cstdlib>
 #include <thread>
@@ -195,13 +198,45 @@ void GpuSplit::Publish() {
     }
 }
 
-void GpuSplit::Drain() {
+namespace {
+struct DrainTimer {
+    GpuSplit::DrainSite site;
+    u64 start;
+    ~DrainTimer() {
+        static constexpr std::array names{"other", "commands", "macro parameters", "sync", "semaphore acquire", "CPU read", "macro DMA read", "end of batch"};
+        static std::array<u64, names.size()> total_ns{};
+        static std::array<u64, names.size()> calls{};
+        static u64 window = start;
+        const u64 now = Nx2Profile::Now();
+        total_ns[static_cast<size_t>(site)] += now - start;
+        ++calls[static_cast<size_t>(site)];
+        if (now - window >= 10000000000ULL) {
+            std::string line;
+            for (size_t i = 0; i < names.size(); ++i) {
+                line += fmt::format(" | {} {:.0f} ms ({:.0f}/s)", names[i],
+                                    static_cast<double>(total_ns[i]) * 1000.0 / static_cast<double>(now - window),
+                                    static_cast<double>(calls[i]) * 1e9 / static_cast<double>(now - window));
+            }
+            LOG_INFO(HW_GPU, "Front waits per second:{}", line);
+            total_ns = {};
+            calls = {};
+            window = now;
+        }
+    }
+};
+} // Anonymous namespace
+
+void GpuSplit::Drain(DrainSite site) {
     consumed_cache = consumed.load(std::memory_order_acquire);
     if (consumed_cache == write_position) {
         return;
     }
     Publish();
     Nx2Profile::Scope scope{Nx2Profile::Zone::SplitDrain};
+    std::optional<DrainTimer> timer;
+    if (Nx2Profile::Enabled()) {
+        timer.emplace(DrainTimer{site, Nx2Profile::Now()});
+    }
     for (u32 spins = 0;; ++spins) {
         consumed_cache = consumed.load(std::memory_order_acquire);
         if (consumed_cache == write_position) {

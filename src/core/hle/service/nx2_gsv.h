@@ -24,6 +24,7 @@
 #include <mutex>
 #include <vector>
 
+#include "common/nx2_ram_trim.h"
 #include "common/alignment.h"
 #include "common/div_ceil.h"
 #include "common/settings.h"
@@ -1906,6 +1907,7 @@ private:
     // waits on the 32 event until it has fired twice before it submits any GPU work, and hung
     // there while it never fired.
     void GetVsyncEvent(HLERequestContext& ctx) {
+        Common::StartNx2RamTrim();
         LOG_INFO(Service, "nx2:vi2 {} vsync event, [2]={:#x}", ctx.GetCommand(), ctx.CommandBuffer()[2]);
         auto* event = m_context.CreateEvent(fmt::format("nx2:vi2:Vsync{}", m_events.size()));
         m_events.push_back(event);
