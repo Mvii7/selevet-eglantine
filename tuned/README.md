@@ -101,6 +101,10 @@ This source sends work to the host GPU every 128 draws instead of every 4096 (`E
 
 This source fetches GPU-written command lists in one batch per GPU wait instead of one wait each (`EDEN_NX2_CMD_BATCH=0` restores that), and skips the wait for a semaphore when a release that meets it is already queued for the split GPU thread (`EDEN_NX2_ACQUIRE_QUEUED=0` restores that). The release turns on `EDEN_NX2_QMD_ACQUIRE_SKIP=1` in `nx2_switches.txt`. Changing the memory layout now restarts the emulated system. `EDEN_NX2_CMD_STATS=1` logs the GPU waits every 10 seconds, and `EDEN_NX2_SHADOW_SKIP=N` (off) redraws shadow maps every N frames.
 
+## Performance build 3
+
+The CPU translator no longer uses AVX-512, even on CPUs that have it (`EDEN_NX2_AVX512=1` turns it back on). The upscaler fallback also looks for its images at constant buffer 0 +0x60 and +0x70, where Donkey Kong Bananza version 458752 keeps them. The video decoder only marks a picture from the final input as the end of a video. The release no longer turns on `EDEN_NX2_QMD_ACQUIRE_SKIP`.
+
 ## License and AI disclosure
 
 GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.
