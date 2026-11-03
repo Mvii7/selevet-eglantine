@@ -9,7 +9,10 @@
 #include <cstdlib>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -514,5 +517,82 @@ private:
     std::vector<Waiter> waiters;
     std::atomic<size_t> count{};
 };
+
+// Donkey Kong Bananza's terrain colour pass walks every rock in the reset list on the CPU.
+// EDEN_NX2_MESH_CAP (default 512, 0 keeps every record) leaves that many records drawable, in
+// list order, and forces the rest to a zero instance count. The cull pass rewrites those
+// records, so the same addresses are silenced again when the macro reads them.
+[[nodiscard]] inline u32 Nx2MeshCap() {
+    static const u32 cap = [] {
+        const char* const value = std::getenv("EDEN_NX2_MESH_CAP");
+        if (value == nullptr || value[0] == '\0') {
+            return 512u;
+        }
+        return static_cast<u32>(std::strtoul(value, nullptr, 10));
+    }();
+    return cap;
+}
+
+struct Nx2MeshCapSnapshot {
+    std::unordered_set<GPUVAddr> dropped;
+};
+
+inline std::atomic<bool>& Nx2MeshCapArmedFlag() {
+    static std::atomic<bool> armed{false};
+    return armed;
+}
+
+struct Nx2MeshCapStore {
+    std::mutex mutex;
+    std::unordered_map<GPUVAddr, std::vector<GPUVAddr>> by_list;
+    std::shared_ptr<const Nx2MeshCapSnapshot> published = std::make_shared<Nx2MeshCapSnapshot>();
+};
+
+inline Nx2MeshCapStore& Nx2MeshCapStoreInstance() {
+    static Nx2MeshCapStore store;
+    return store;
+}
+
+[[nodiscard]] inline bool Nx2MeshCapArmed() {
+    return Nx2MeshCap() != 0 && Nx2MeshCapArmedFlag().load(std::memory_order_acquire);
+}
+
+inline void Nx2MeshCapPublish(GPUVAddr list, std::vector<GPUVAddr> dropped) {
+    if (Nx2MeshCap() == 0) {
+        return;
+    }
+    auto& store = Nx2MeshCapStoreInstance();
+    std::scoped_lock lock{store.mutex};
+    const auto it = store.by_list.find(list);
+    if (it != store.by_list.end() && it->second == dropped) {
+        return;
+    }
+    if (dropped.empty()) {
+        store.by_list.erase(list);
+    } else {
+        store.by_list.insert_or_assign(list, std::move(dropped));
+    }
+    auto next = std::make_shared<Nx2MeshCapSnapshot>();
+    for (const auto& [list_begin, addresses] : store.by_list) {
+        (void)list_begin;
+        next->dropped.insert(addresses.begin(), addresses.end());
+    }
+    const bool armed = !next->dropped.empty();
+    store.published = std::move(next);
+    Nx2MeshCapArmedFlag().store(armed, std::memory_order_release);
+}
+
+[[nodiscard]] inline bool Nx2MeshCapDropped(GPUVAddr address) {
+    if (!Nx2MeshCapArmed()) {
+        return false;
+    }
+    auto& store = Nx2MeshCapStoreInstance();
+    std::shared_ptr<const Nx2MeshCapSnapshot> published;
+    {
+        std::scoped_lock lock{store.mutex};
+        published = store.published;
+    }
+    return published->dropped.contains(address);
+}
 
 } // namespace Tegra

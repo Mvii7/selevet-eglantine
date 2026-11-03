@@ -55,6 +55,7 @@
 #include "video_core/texture_cache/texture_cache_base.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+#include "video_core/nx2.h"
 #include "video_core/nx2_profile.h"
 
 namespace Vulkan {
@@ -362,6 +363,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                     std::vector<u64> pointers;
                     std::vector<VideoCommon::IndirectResetSpan> spans;
                     std::vector<GPUVAddr> direct;
+                    std::unordered_set<GPUVAddr> dropped;
                 };
                 static std::array<CachedList, 8> cached_lists{};
                 static u32 cache_stamp = 0;
@@ -428,10 +430,14 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                     entry->pointers.clear();
                     entry->spans.clear();
                     entry->direct.clear();
+                    entry->dropped.clear();
                     entry = nullptr;
                 }
                 std::vector<VideoCommon::IndirectResetSpan> built_spans;
                 std::vector<GPUVAddr> built_direct;
+                std::unordered_set<GPUVAddr> built_dropped;
+                const u32 mesh_cap = Tegra::Nx2MeshCap();
+                u32 kept_records = 0;
                 if (!reused) {
                     std::vector<VideoCommon::IndirectResetPiece> pieces;
                     pieces.reserve(count);
@@ -439,6 +445,14 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                         if (pointer == 0 ||
                             !gpu_memory->IsFullyMappedRange(pointer, sizeof(record))) {
                             continue;
+                        }
+                        // List order, so the first records stay and the tail is the stand-in for
+                        // a shorter view distance. The cull pass fills every record; the addresses
+                        // past the cap are silenced again when that record is read back.
+                        if (mesh_cap != 0 && kept_records >= mesh_cap) {
+                            built_dropped.insert(pointer);
+                        } else {
+                            ++kept_records;
                         }
                         const auto cpu = gpu_memory->GpuToCpuAddress(pointer);
                         if (!cpu) {
@@ -448,6 +462,17 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                         pieces.push_back(VideoCommon::IndirectResetPiece{pointer, *cpu});
                     }
                     VideoCommon::CoalesceIndirectResetPieces(pieces, sizeof(record), built_spans);
+                    if (mesh_cap != 0) {
+                        std::vector<GPUVAddr> dropped_list(built_dropped.begin(), built_dropped.end());
+                        std::sort(dropped_list.begin(), dropped_list.end());
+                        Tegra::Nx2MeshCapPublish(list_begin, std::move(dropped_list));
+                        static std::unordered_set<GPUVAddr> logged_lists;
+                        if (logged_lists.insert(list_begin).second) {
+                            LOG_INFO(HW_GPU,
+                                     "Terrain mesh cap {}: list {:#x} keeps {}, drops {}",
+                                     mesh_cap, list_begin, kept_records, built_dropped.size());
+                        }
+                    }
                     if (!built_spans.empty() || !built_direct.empty()) {
                         entry = &*std::ranges::min_element(
                             cached_lists, [](const CachedList& a, const CachedList& b) {
@@ -458,13 +483,17 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                         entry->pointers = pointers;
                         entry->spans = built_spans;
                         entry->direct = built_direct;
+                        entry->dropped = std::move(built_dropped);
                         entry->stamp = ++cache_stamp;
                     }
                 } else {
                     entry->stamp = ++cache_stamp;
                 }
+                static const std::unordered_set<GPUVAddr> no_drops;
                 const auto& spans = reused ? entry->spans : built_spans;
                 const auto& direct = reused ? entry->direct : built_direct;
+                const auto& dropped = entry != nullptr ? entry->dropped : no_drops;
+                static constexpr std::array<u32, 5> silent{};
                 static std::vector<u8> payload;
                 static std::vector<VideoCommon::RepeatedInline> repeated;
                 static std::vector<u8> uploaded;
@@ -476,7 +505,8 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                 u32 written = static_cast<u32>(direct.size());
                 u32 buffer_copies = 0;
                 for (const GPUVAddr address : direct) {
-                    gpu_memory->WriteBlock(address, record.data(), sizeof(record));
+                    const auto& words = dropped.contains(address) ? silent : record;
+                    gpu_memory->WriteBlock(address, words.data(), sizeof(words));
                 }
                 {
                     // buffer_cache.mutex is already held by the lock at the start of PrepareDraw.
@@ -486,14 +516,24 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                     for (const VideoCommon::IndirectResetSpan& span : spans) {
                         const size_t bytes = size_t{span.count} * sizeof(record);
                         payload.resize(bytes);
-                        std::memcpy(payload.data(), record.data(), sizeof(record));
-                        size_t filled = sizeof(record);
-                        while (filled * 2 <= bytes) {
-                            std::memcpy(payload.data() + filled, payload.data(), filled);
-                            filled *= 2;
-                        }
-                        if (filled < bytes) {
-                            std::memcpy(payload.data() + filled, payload.data(), bytes - filled);
+                        if (dropped.empty()) {
+                            std::memcpy(payload.data(), record.data(), sizeof(record));
+                            size_t filled = sizeof(record);
+                            while (filled * 2 <= bytes) {
+                                std::memcpy(payload.data() + filled, payload.data(), filled);
+                                filled *= 2;
+                            }
+                            if (filled < bytes) {
+                                std::memcpy(payload.data() + filled, payload.data(),
+                                            bytes - filled);
+                            }
+                        } else {
+                            for (u32 index = 0; index < span.count; ++index) {
+                                const GPUVAddr address = span.gpu + u64{index} * sizeof(record);
+                                const auto& words = dropped.contains(address) ? silent : record;
+                                std::memcpy(payload.data() + index * sizeof(record), words.data(),
+                                            sizeof(record));
+                            }
                         }
                         device_memory.WriteBlockUnsafe(span.cpu, payload.data(), bytes);
                         written += span.count;
@@ -751,6 +791,12 @@ bool SkipShadowPass(const Tegra::Engines::Maxwell3D& maxwell3d) {
 } // Anonymous namespace
 
 void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
+    // A zero instance count draws nothing. Terrain past the mesh cap is forced to that, and
+    // building a pipeline for it is CPU the frame does not have.
+    if (instance_count == 0 && Tegra::Nx2MeshCapArmed()) {
+        gpu.TickWork();
+        return;
+    }
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::Draw};
     TraceWindowTarget(*maxwell3d, *gpu_memory, is_indexed ? "draw-indexed" : "draw",
                       is_indexed ? maxwell3d->draw_manager.draw_state.index_buffer.count

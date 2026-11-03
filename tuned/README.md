@@ -122,10 +122,12 @@ Donkey Kong Bananza's hilltop layer is a larger terrain than the earlier worlds.
 
 The command-entry batch keeps the entries that are still being read, up to 16384, instead of the first 1024 from earlier areas.
 
+The colour pass still walks every rock on the CPU. `EDEN_NX2_MESH_CAP` (default 512, `0` keeps every record) leaves that many records in the reset list drawable and forces the rest to draw nothing, including after the cull pass rewrites them. The first time a list is capped it logs how many records were kept and dropped. Distant pieces go missing; that is the test.
+
 ## License and AI disclosure
 
 GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.
 
 The changes in this repo were written with Claude (Anthropic), then tested in-game by the repo owner. They have not been reviewed by the Eglantine developers.
 
-The NUP loader and the 30 FPS checkbox were written with Grok 4.7.
+The NUP loader, the 30 FPS checkbox, and the terrain mesh cap were written with Grok 4.7.

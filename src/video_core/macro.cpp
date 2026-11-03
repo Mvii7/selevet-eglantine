@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <unordered_set>
@@ -37,6 +38,7 @@
 #include "common/bit_field.h"
 #include "common/logging.h"
 #include "video_core/engines/maxwell_3d.h"
+#include "video_core/nx2.h"
 #include "video_core/nx2_profile.h"
 
 namespace Tegra {
@@ -1382,6 +1384,14 @@ YUZU_NO_INLINE void MacroEngine::ReadNativeMemory(Engines::Maxwell3D& maxwell3d,
     const u32 word_count = std::min<u32>(value, 0x1000);
     std::array<u32, 0x1000> dma_words;
     memory.ReadWordsUnsafe(source, dma_words.data(), word_count);
+    // Same records the mesh cap dropped. The cull pass has usually rewritten them by now,
+    // so zero the copy the macro is about to consume. A read longer than one record still
+    // starts at that record.
+    if (word_count > 0 && word_count <= 64 && Tegra::Nx2MeshCapDropped(source)) {
+        const u32 words = std::min<u32>(word_count, 5);
+        std::fill_n(dma_words.begin(), words, 0u);
+        memory.WriteBlockUnsafe(source, dma_words.data(), size_t{words} * sizeof(u32));
+    }
     for (u32 i = 0; i < word_count; ++i) {
         const u32 word = dma_words[i];
         if (address == DmaReadFifoed) {
