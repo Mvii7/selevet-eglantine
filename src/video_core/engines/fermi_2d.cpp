@@ -132,27 +132,7 @@ void Fermi2D::Blit() {
     }
 
     memory_manager.FlushCaching();
-    const bool accelerated = rasterizer->AccelerateSurfaceCopy(src, regs.dst, config);
-    // The first scaled or depth blits of a session, and whether the GPU took them: one the
-    // software blitter does instead leaves the texture cache's copy stale (Kirby Air Riders
-    // scales its 2048x2048 Depth16 shadow map into a 1024x1024 one every frame).
-    if (!accelerated || (config.src_x1 - config.src_x0) != (config.dst_x1 - config.dst_x0)) {
-        static u32 logged{};
-        if (logged++ < 24 || !accelerated) {
-            static u32 logged_software{};
-            if (accelerated || logged_software++ < 24) {
-                LOG_INFO(HW_GPU, "2D blit {:#x} {}x{} fmt {:#x} -> {:#x} {}x{} fmt {:#x}, rect "
-                                 "({},{})-({},{}) -> ({},{})-({},{}) filter {}: {}",
-                         src.Address(), src.width, src.height, static_cast<u32>(src.format),
-                         regs.dst.Address(), regs.dst.width, regs.dst.height,
-                         static_cast<u32>(regs.dst.format), config.src_x0, config.src_y0,
-                         config.src_x1, config.src_y1, config.dst_x0, config.dst_y0, config.dst_x1,
-                         config.dst_y1, static_cast<u32>(config.filter),
-                         accelerated ? "on the GPU" : "SOFTWARE (texture cache copy left stale)");
-            }
-        }
-    }
-    if (!accelerated) {
+    if (!rasterizer->AccelerateSurfaceCopy(src, regs.dst, config)) {
         sw_blitter->Blit(src, regs.dst, config);
     }
 }

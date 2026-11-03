@@ -331,11 +331,8 @@ struct Values {
                                                          linkage, true, "cpuopt_unsafe_inaccurate_nan", Category::CpuUnsafe};
     SwitchableSetting<bool> cpuopt_unsafe_fastmem_check{
                                                         linkage, true, "cpuopt_unsafe_fastmem_check", Category::CpuUnsafe};
-    // Off by default: with Unsafe accuracy (the default) the guest's exclusive pairs then lost
-    // their cross-thread checks, and Kirby Air Riders' lock-free job queue ran a torn-down job
-    // and aborted (2162-0001) at random after its movies stopped.
     SwitchableSetting<bool> cpuopt_unsafe_ignore_global_monitor{
-                                                                linkage, false, "cpuopt_unsafe_ignore_global_monitor", Category::CpuUnsafe};
+                                                                linkage, true, "cpuopt_unsafe_ignore_global_monitor", Category::CpuUnsafe};
 
     // Renderer
     SwitchableSetting<RendererBackend, true> renderer_backend{linkage,

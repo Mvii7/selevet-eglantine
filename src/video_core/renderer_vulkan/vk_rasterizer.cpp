@@ -665,27 +665,6 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
                          tic.Address(), tic.Width(), tic.Height(), static_cast<u32>(tic.format.Value()));
             }
         }
-        // Handles in the fragment stage's other buffers (bindless materials and lighting tables):
-        // words naming a real image of at least 4x4.
-        for (u32 slot = 0; slot < Tegra::Engines::Maxwell3D::Regs::MaxConstBuffers; ++slot) {
-            const auto& buffer = maxwell3d->state.shader_stages[4].const_buffers[slot];
-            if (slot == 2 || !buffer.enabled || buffer.size == 0) continue;
-            const u32 size = std::min<u32>(buffer.size, 0x400);
-            for (u32 offset = 0; offset + 4 <= size; offset += 4) {
-                const u32 handle = gpu_memory->Read<u32>(buffer.address + offset);
-                const u32 index = handle & 0xfffff;
-                if (handle == 0 || index == 0 || index > regs.tex_header.limit) continue;
-                Tegra::Texture::TICEntry tic{};
-                gpu_memory->ReadBlockUnsafe(regs.tex_header.Address() + u64{index} * sizeof(tic),
-                                            &tic, sizeof(tic));
-                if (tic.Address() == 0 || tic.Width() < 4 || tic.Height() < 4 ||
-                    tic.Width() > 16384 || tic.Height() > 16384) continue;
-                LOG_INFO(HW_GPU, "  fs c{}+{:#x} = {:#x}: {:#x} {}x{}x{} type {} format {:#x}", slot,
-                         offset, handle, tic.Address(), tic.Width(), tic.Height(), tic.Depth(),
-                         static_cast<u32>(tic.texture_type.Value()),
-                         static_cast<u32>(tic.format.Value()));
-            }
-        }
         const auto& bt = regs.blend_per_target[0];
         LOG_INFO(HW_GPU, "  blend enable {} per-target {} global op {} src {:#x} dst {:#x} | rt0 op {} src {:#x} dst {:#x} alpha {:#x}/{:#x} mask {:#x}",
                  regs.blend.enable[0], regs.blend_per_target_enabled,

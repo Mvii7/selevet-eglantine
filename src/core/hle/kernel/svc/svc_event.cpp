@@ -64,8 +64,6 @@ Result ClearEvent(Core::System& system, Handle event_handle) {
         }
     }
 
-    // nn::os::ClearSystemEvent aborts on this (Kirby Air Riders after a video stops).
-    LOG_WARNING(Kernel_SVC, "ClearEvent: handle {:#010x} is not an event", event_handle);
     R_THROW(ResultInvalidHandle);
 }
 

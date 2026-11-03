@@ -29,7 +29,6 @@
 #include "shader_recompiler/environment.h"
 #include "shader_recompiler/exception.h"
 #include "shader_recompiler/frontend/ampere/lower_to_maxwell.h"
-#include "shader_recompiler/frontend/ampere/lower_to_maxwell_b131.h"
 #include "shader_recompiler/frontend/ampere/program_override.h"
 #include "shader_recompiler/frontend/ampere/program_capture.h"
 #include "shader_recompiler/frontend/ampere/program_address_map.h"
@@ -434,53 +433,9 @@ std::shared_ptr<const LoweredNativeCode> GenericEnvironment::LowerNativeCode(u32
         }
         if (status == Shader::Ampere::ProgramCaptureState::Result::Complete) break;
     }
-    // EDEN_NX2_B131_FIRST=1: build-131's lowering first, Selevet's for what it rejects (a test of
-    // which lowering a game's look depends on; Kirby Air Riders' characters drew black).
-    static const bool b131_first = std::getenv("EDEN_NX2_B131_FIRST") != nullptr;
-    const bool b131_stage = stage != Shader::Stage::Geometry && stage != Shader::Stage::Task &&
-                            stage != Shader::Stage::Mesh;
-    Shader::Ampere::LoweredProgram lowered;
-    bool lowered_by_b131 = false;
-    if (b131_first && b131_stage) {
-        const std::span<const Shader::Ampere::B131::Instruction> code{
-            reinterpret_cast<const Shader::Ampere::B131::Instruction*>(native.data()), native.size()};
-        if (auto first = Shader::Ampere::B131::LowerToMaxwell(code)) {
-            lowered.instructions = std::move(first.instructions);
-            lowered.source_instruction_offsets = std::move(first.source_instruction_offsets);
-            lowered.source_size = first.source_size;
-            lowered.required_texture_buffer = first.required_texture_buffer;
-            lowered_by_b131 = true;
-        }
-    }
-    if (!lowered_by_b131) {
-        lowered = Shader::Ampere::LowerToMaxwell(
-            native, stage == Shader::Stage::Geometry,
-            stage == Shader::Stage::Task || stage == Shader::Stage::Mesh);
-    }
-    // Programs Selevet's lowering rejects get build-131's (Kirby Air Riders: CSMTEST, warp and
-    // bindless forms it was written against). Selevet's goes first: build-131's rejected about 35
-    // of Donkey Kong Bananza's shaders. Geometry, task and mesh programs need Selevet's stage
-    // handling and stay with it. EDEN_NX2_B131_FALLBACK=0 turns the fallback off.
-    static const bool b131_fallback = [] {
-        const char* value = std::getenv("EDEN_NX2_B131_FALLBACK");
-        return value == nullptr || value[0] != '0';
-    }();
-    if (!lowered && b131_fallback && !b131_first && b131_stage) {
-        static_assert(sizeof(Shader::Ampere::B131::Instruction) == sizeof(Shader::Ampere::Instruction));
-        const std::span<const Shader::Ampere::B131::Instruction> code{
-            reinterpret_cast<const Shader::Ampere::B131::Instruction*>(native.data()), native.size()};
-        auto fallback = Shader::Ampere::B131::LowerToMaxwell(code);
-        if (fallback) {
-            LOG_INFO(Shader, "Native shader at {:#x} lowered by build-131's lowering ({} at {:#x})",
-                     program_base, lowered.error, lowered.error_offset);
-            lowered.instructions = std::move(fallback.instructions);
-            lowered.source_instruction_offsets = std::move(fallback.source_instruction_offsets);
-            lowered.source_size = fallback.source_size;
-            lowered.required_texture_buffer = fallback.required_texture_buffer;
-            lowered.error_offset = 0;
-            lowered.error = {};
-        }
-    }
+    auto lowered = Shader::Ampere::LowerToMaxwell(
+        native, stage == Shader::Stage::Geometry,
+        stage == Shader::Stage::Task || stage == Shader::Stage::Mesh);
     // EDEN_NX2_REJECT=<hex address>,...: treat these programs as rejected (to find which newly
     // lowered program changes a game's behaviour without rebuilding).
     if (static const std::string reject_list = [] {

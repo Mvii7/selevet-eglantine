@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <optional>
@@ -34,15 +33,6 @@ namespace Tegra::Engines {
 
 /// First register id that is actually a Macro call.
 constexpr u32 MacroRegistersStart = 0xE00;
-
-/// EDEN_NX2_DEFERRED_FLUSH=0 draws waiting instances only at the next draw or macro end again.
-static bool DeferredFlushEnabled() {
-    static const bool enabled = [] {
-        const char* value = std::getenv("EDEN_NX2_DEFERRED_FLUSH");
-        return !value || value[0] != '0';
-    }();
-    return enabled;
-}
 
 Maxwell3D::Maxwell3D(MemoryManager& memory_manager_)
     : draw_manager()
@@ -358,7 +348,7 @@ void Maxwell3D::ProcessDirtyRegisters(u32 method, u32 argument) {
     // The instances after the first are drawn together once their loop ends, and they must see
     // the state they were begun with: NVN's draw macros reset the base instance (and its copy in
     // c[0][0x644]) right after the loop, before the macro returns.
-    if (draw_manager.HasDeferredDraw() && !DrawManager::IsInstanceLoopMethod(method) && DeferredFlushEnabled()) [[unlikely]] {
+    if (draw_manager.HasDeferredDraw() && !DrawManager::IsInstanceLoopMethod(method)) [[unlikely]] {
         draw_manager.DrawDeferred(*this);
     }
     regs.reg_array[method] = argument;
@@ -560,7 +550,7 @@ void Maxwell3D::CallMultiMethod(Core::System& system, u32 method, const u32* bas
         return;
     }
     // As in ProcessDirtyRegisters: the paths below write without it.
-    if (draw_manager.HasDeferredDraw() && !DrawManager::IsInstanceLoopMethod(method) && DeferredFlushEnabled()) [[unlikely]] {
+    if (draw_manager.HasDeferredDraw() && !DrawManager::IsInstanceLoopMethod(method)) [[unlikely]] {
         draw_manager.DrawDeferred(*this);
     }
     switch (method) {

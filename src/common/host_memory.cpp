@@ -191,29 +191,9 @@ public:
     }
 
     void Commit(size_t physical_offset, size_t length) {
-        if (!deferred_commit) {
-            return;
-        }
-        // A system-managed pagefile grows only once a commit has failed, and not at once: Kirby
-        // Air Riders' heap growth as a race loads failed on the first try and ended the process.
-        // Retry for up to 10 s while Windows grows it.
-        constexpr int Attempts = 200;
-        for (int attempt = 0;; ++attempt) {
-            if (VirtualAlloc(backing_base + physical_offset, length, MEM_COMMIT, PAGE_READWRITE)) {
-                if (attempt != 0) {
-                    LOG_WARNING(HW_Memory, "Committed {:#x} bytes after {} ms of retries (host "
-                                           "commit limit reached)",
-                                length, attempt * 50);
-                }
-                return;
-            }
-            if (attempt + 1 == Attempts) {
-                LOG_CRITICAL(HW_Memory, "Could not commit {:#x} bytes of guest memory, error {}: "
-                                        "the host is out of RAM and pagefile",
-                             length, GetLastError());
-                throw std::bad_alloc{};
-            }
-            Sleep(50);
+        if (deferred_commit &&
+            !VirtualAlloc(backing_base + physical_offset, length, MEM_COMMIT, PAGE_READWRITE)) {
+            throw std::bad_alloc{};
         }
     }
 

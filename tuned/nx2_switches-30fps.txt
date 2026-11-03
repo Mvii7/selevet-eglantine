@@ -1,8 +1,7 @@
 # Read at every start of the Eglantine GUI. One NAME=VALUE per line, # for comments.
 # Unsafe shortcut. Delete the line below if you get glitches.
 EDEN_NX2_UNSAFE_PREEMPTIVE_READS=1
-# Sparse tile mapping: on, or Mario Kart World, Pokopia and Kirby Air Riders draw black scenery,
-# sky and shadows. It costs some speed; delete the line below to compare.
-EDEN_NX2_SPARSE_REMAP=1
+# Sparse tile mapping is off. To try it, remove the # below. It ran about 15-20% slower on an RTX 3050.
+#EDEN_NX2_SPARSE_REMAP=1
 # 30FPS PATCH: limits the game to 30 fps. Delete the line below to go back to 60.
 EDEN_NX2_PRESENT_HZ=30
