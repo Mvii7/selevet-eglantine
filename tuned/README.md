@@ -85,9 +85,9 @@ cmake --build build/pgo-use --target yuzu
 
 To train your own profile, build with `tuned/pgo-gen-cache.cmake`, run with `LLVM_PROFILE_FILE` set, play for a while, then merge the output with `llvm-profdata merge -o tuned/eglantine.profdata`. A profile trained on your own games and CPU should suit you better than the one included here.
 
-## 30FPS PATCH
+## 30 FPS limit
 
-The 30FPS PATCH release limits the game to 30 fps. It uses this source with `tuned/nx2_switches-30fps.txt` as `nx2_switches.txt` beside the exe. `EDEN_NX2_PRESENT_HZ=<rate>` sets the limit; without it, the game is held to 60 as usual.
+Graphics settings has **Limit speed to 30 FPS**. It holds presents to 30 per second and applies without restarting. `EDEN_NX2_PRESENT_HZ=<rate>` in `nx2_switches.txt` overrides the checkbox, which is how the old separate 30 FPS download worked: it was this same program with that line set to 30.
 
 ## Build 104 merge
 
@@ -114,6 +114,8 @@ The loader makes the Switch 2 SDK's `nn::vi::detail::DefaultDisplay::QueryVrrSup
 This line starts again from build 4. Builds 5 and 6 (the build-131 graphics merge, NVIDIA optical flow, and sparse tile mapping on by default) are not included: they were slower in Donkey Kong Bananza.
 
 NUP containers load, and a loose dump can be packed from the game list (`Convert to NUP...`) or with `eden-cli --pack-nup <dump> [<out.nup>]`. Building a loose RomFS no longer leaks a copy of every file, and the game list does not build that RomFS until something reads it.
+
+Graphics settings has a 30 FPS present cap so a slower CPU can be tested without a second download. The VRR report is unchanged: it only answers the game's display question. A frame that finishes late still makes the game wait.
 
 Donkey Kong Bananza's hilltop layer is a larger terrain than the earlier worlds. Two costs grew with it:
 

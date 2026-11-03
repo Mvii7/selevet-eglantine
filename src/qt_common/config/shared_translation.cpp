@@ -140,6 +140,11 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
            tr("Changes the output graphics API.\nVulkan is recommended."));
     INSERT(Settings, vulkan_device, tr("Device:"),
            tr("This setting selects the GPU to use (Vulkan only)."));
+    INSERT(Settings, limit_speed_to_30, tr("Limit speed to 30 FPS"),
+           tr("Presents at most 30 frames per second.\n"
+              "Use this while testing when the CPU cannot hold 60.\n"
+              "The game still slows down if a frame takes longer than that.\n"
+              "EDEN_NX2_PRESENT_HZ in nx2_switches.txt overrides this checkbox."));
     INSERT(Settings, resolution_setup, tr("Resolution:"),
            tr("Forces to render at a different resolution.\n"
               "Higher resolutions require more VRAM and bandwidth.\n"
