@@ -3,5 +3,4 @@
 EDEN_NX2_UNSAFE_PREEMPTIVE_READS=1
 # Sparse tile mapping is off. To try it, remove the # below. It ran about 15-20% slower on an RTX 3050.
 #EDEN_NX2_SPARSE_REMAP=1
-# 30FPS PATCH: limits the game to 30 fps. Delete the line below to go back to 60.
-EDEN_NX2_PRESENT_HZ=30
+# The 30 FPS cap is Graphics settings > Limit speed to 30 FPS.
