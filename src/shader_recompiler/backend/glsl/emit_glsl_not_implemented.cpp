@@ -97,20 +97,4 @@ void EmitGetInBoundsFromOp(EmitContext& ctx) {
     NotImplemented();
 }
 
-void EmitIsbeRead(EmitContext& ctx) {
-    NotImplemented();
-}
-
-void EmitIsbeWriteAttribute(EmitContext& ctx) {
-    NotImplemented();
-}
-
-void EmitIsbeWriteMapU8(EmitContext& ctx) {
-    NotImplemented();
-}
-
-void EmitIsbeWriteMapU32(EmitContext& ctx) {
-    NotImplemented();
-}
-
 } // namespace Shader::Backend::GLSL

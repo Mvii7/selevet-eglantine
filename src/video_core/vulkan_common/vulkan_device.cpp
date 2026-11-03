@@ -752,9 +752,6 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
 
     graphics_queue = logical.GetQueue(graphics_family);
     present_queue = logical.GetQueue(present_family);
-    if (has_optical_flow_queue) {
-        optical_flow_queue = logical.GetQueue(optical_flow_family);
-    }
 
     VmaVulkanFunctions functions{};
     functions.vkGetInstanceProcAddr = dld.vkGetInstanceProcAddr;
@@ -782,14 +779,10 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
             .flags = flags,
             .physicalDevice = physical,
             .device = *logical,
-            // 16 MiB blocks on discrete GPUs too: with 256 MiB ones, Switch 2 titles' mix of
+            // 64 MiB blocks on discrete GPUs too: with 256 MiB ones, Switch 2 titles' mix of
             // texture sizes left ~38% of the image blocks empty (2 GB of an 8 GB card in title
-            // 1), which the texture cache counted as used and kept evicting textures for. With
-            // 64 MiB ones textures created and deleted by the thousand still left ~1.7 GB of holes
-            // after ten minutes, with 32 MiB ones ~0.5 GB: a block drains only once all of its
-            // images are gone, and fewer per block drain sooner. VMA gives allocations over half a
-            // block (8 MiB) their own memory, which goes back to the driver when they are freed.
-            .preferredLargeHeapBlockSize = 16u * 1024u * 1024u,
+            // 1), which the texture cache counted as used and kept evicting textures for.
+            .preferredLargeHeapBlockSize = 64u * 1024u * 1024u,
             .pAllocationCallbacks = nullptr,
             .pDeviceMemoryCallbacks = nullptr,
             .pHeapSizeLimit = heap_size_limit != 0 ? heap_size_limits.data() : nullptr,
@@ -811,35 +804,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
 Device::~Device() {
     SaveStaticPipelineCache();
     ShutdownGPULogging();
-    for (auto& pools : separate_pools) {
-        for (VmaPool pool : pools) {
-            if (pool != VK_NULL_HANDLE) {
-                vmaDestroyPool(allocator, pool);
-            }
-        }
-    }
     vmaDestroyAllocator(allocator);
-}
-
-VmaPool Device::GetSeparatePool(SeparatePool kind, u32 memory_type) const {
-    std::scoped_lock lk{separate_pools_mutex};
-    VmaPool& pool = separate_pools[static_cast<u32>(kind)][memory_type];
-    if (pool == VK_NULL_HANDLE) {
-        const VmaPoolCreateInfo ci{
-            .memoryTypeIndex = memory_type,
-            .flags = 0,
-            .blockSize = SeparatePoolBlockSize,
-            .minBlockCount = 0,
-            .maxBlockCount = 0,
-            .priority = 0.f,
-            .minAllocationAlignment = 0,
-            .pMemoryAllocateNext = nullptr,
-        };
-        if (vmaCreatePool(allocator, &ci, &pool) != VK_SUCCESS) {
-            pool = VK_NULL_HANDLE;
-        }
-    }
-    return pool;
 }
 
 void Device::LoadStaticPipelineCache() {
@@ -1550,15 +1515,6 @@ void Device::RemoveUnsuitableExtensions() {
                                VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
     }
 
-    // VK_EXT_mesh_shader: Switch 2 titles draw some geometry with task and mesh programs. Only
-    // the two stages are used; the multiview, shading rate and query features need more.
-    features.mesh_shader.multiviewMeshShader = VK_FALSE;
-    features.mesh_shader.primitiveFragmentShadingRateMeshShader = VK_FALSE;
-    features.mesh_shader.meshShaderQueries = VK_FALSE;
-    extensions.mesh_shader = features.mesh_shader.taskShader && features.mesh_shader.meshShader;
-    RemoveExtensionFeatureIfUnsuitable(extensions.mesh_shader, features.mesh_shader,
-                                       VK_EXT_MESH_SHADER_EXTENSION_NAME);
-
     // VK_KHR_shader_quad_control
     extensions.shader_quad_control = features.shader_quad_control.shaderQuadControl;
     RemoveExtensionFeatureIfUnsuitable(extensions.shader_quad_control, features.shader_quad_control,
@@ -1611,13 +1567,6 @@ void Device::RemoveUnsuitableExtensions() {
     extensions.synchronization2 = features.synchronization2.synchronization2;
     RemoveExtensionFeatureIfUnsuitable(extensions.synchronization2, features.synchronization2,
                                        VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
-
-    // VK_NV_optical_flow (needs VK_KHR_format_feature_flags2 and VK_KHR_synchronization2, both
-    // core in Vulkan 1.3)
-    extensions.optical_flow = extensions.optical_flow && features.optical_flow.opticalFlow &&
-                              instance_version >= VK_API_VERSION_1_3;
-    RemoveExtensionFeatureIfUnsuitable(extensions.optical_flow, features.optical_flow,
-                                       VK_NV_OPTICAL_FLOW_EXTENSION_NAME);
 }
 
 void Device::SetupFamilies(VkSurfaceKHR surface) {
@@ -1654,29 +1603,6 @@ void Device::SetupFamilies(VkSurfaceKHR surface) {
     }
     if (present) {
         present_family = *present;
-    }
-
-    // VK_NV_optical_flow executes on its own queue family (VK_QUEUE_OPTICAL_FLOW_BIT_NV).
-    has_optical_flow_queue = false;
-    if (extensions.optical_flow) {
-        for (u32 index = 0; index < static_cast<u32>(queue_family_properties.size()); ++index) {
-            const VkQueueFamilyProperties& queue_family = queue_family_properties[index];
-            if (queue_family.queueCount == 0 || index == graphics_family ||
-                index == present_family) {
-                continue;
-            }
-            if (queue_family.queueFlags & VK_QUEUE_OPTICAL_FLOW_BIT_NV) {
-                optical_flow_family = index;
-                has_optical_flow_queue = true;
-                break;
-            }
-        }
-        if (has_optical_flow_queue) {
-            LOG_INFO(Render_Vulkan, "Optical flow queue family: {}", optical_flow_family);
-        } else {
-            LOG_INFO(Render_Vulkan,
-                     "VK_NV_optical_flow is available but no dedicated optical flow queue exists");
-        }
     }
 }
 
@@ -1715,16 +1641,6 @@ u64 Device::GetDeviceMemoryUsage() const {
         result += AllocatedUsage(budget.heapUsage[heap], heap_budgets[heap]);
     }
     return result;
-}
-
-u64 Device::GetDeviceMemorySlack() const {
-    if (allocator == nullptr) {
-        return 0;
-    }
-    std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> heap_budgets{};
-    vmaGetHeapBudgets(allocator, heap_budgets.data());
-    const VmaStatistics& statistics = heap_budgets[main_heap].statistics;
-    return statistics.blockBytes - (std::min)(statistics.blockBytes, statistics.allocationBytes);
 }
 
 u64 Device::GetDeviceMemoryBudget() const {
@@ -1850,9 +1766,6 @@ std::vector<VkDeviceQueueCreateInfo> Device::GetDeviceQueueCreateInfos() const {
     static constexpr float QUEUE_PRIORITY = 1.0f;
 
     ::Common::unordered_set<u32> unique_queue_families{graphics_family, present_family};
-    if (has_optical_flow_queue) {
-        unique_queue_families.insert(optical_flow_family);
-    }
     std::vector<VkDeviceQueueCreateInfo> queue_cis;
     queue_cis.reserve(unique_queue_families.size());
 

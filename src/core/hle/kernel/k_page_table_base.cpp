@@ -1423,8 +1423,6 @@ Result KPageTableBase::MapInsecureMemory(KProcessAddress address, size_t size) {
                                                   Svc::LimitableResource::PhysicalMemoryMax, size);
     R_UNLESS(memory_reservation.Succeeded(), ResultOutOfMemory);
 
-    LOG_INFO(Kernel, "MapInsecureMemory {:#x}+{:#x}", GetInteger(address), size);
-
     // Allocate pages for the insecure memory.
     KPageGroup pg(m_system.Kernel(), m_block_info_manager);
     R_TRY(m_system.Kernel().MemoryManager().AllocateAndOpen(

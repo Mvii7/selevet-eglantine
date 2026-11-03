@@ -25,7 +25,6 @@
 #include "core/debugger/debugger.h"
 #include "core/device_memory.h"
 #include "core/file_sys/fs_filesystem.h"
-#include "core/file_sys/nup_container.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/program_metadata.h"
 #include "core/file_sys/registered_cache.h"
@@ -67,7 +66,6 @@
 #include "hid_core/hid_core.h"
 #include "network/network.h"
 #include "video_core/host1x/host1x.h"
-#include "video_core/nx2.h"
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
 
@@ -118,27 +116,9 @@ namespace {
 
 // Switch 2 titles boot as a loose ExeFS, with main.npdm next to main.
 bool IsSwitch2Program(const FileSys::VirtualFile& file) {
-    FileSys::ProgramMetadata metadata;
-    if (FileSys::NupContainer::IsNupFile(file)) {
-        FileSys::NupContainer nup{file};
-        if (nup.GetStatus() != Loader::ResultStatus::Success) {
-            return false;
-        }
-        std::optional<std::size_t> program;
-        if (const auto base = nup.FindBasePackage();
-            base && nup.GetExeFSDir(*base) != nullptr) {
-            program = base;
-        } else if (const auto update = nup.FindBestUpdatePackage();
-                   update && nup.GetExeFSDir(*update) != nullptr) {
-            program = update;
-        }
-        const auto exefs = program ? nup.GetExeFSDir(*program) : nullptr;
-        const auto npdm = exefs != nullptr ? exefs->GetFile("main.npdm") : nullptr;
-        return npdm != nullptr && metadata.Load(npdm) == Loader::ResultStatus::Success &&
-               metadata.IsSwitch2();
-    }
     const auto dir = file != nullptr ? file->GetContainingDirectory() : nullptr;
     const auto npdm = dir != nullptr ? dir->GetFile("main.npdm") : nullptr;
+    FileSys::ProgramMetadata metadata;
     return npdm != nullptr && metadata.Load(npdm) == Loader::ResultStatus::Success &&
            metadata.IsSwitch2();
 }
@@ -400,9 +380,6 @@ struct System::Impl {
 
         // Expose program id to dump sites and other global readers.
         Settings::SetCurrentProgramID(params.program_id);
-        // The per-title GPU decisions (Nx2NeedsBufferDownloads) need it before the first fence;
-        // the nvhost-ctrl-gpu query that also sets it may come later or not at all.
-        Tegra::g_nx2_program_id = params.program_id;
 
         // Track launch time for frontend launches
         LaunchTimestampCache::SaveLaunchTimestamp(params.program_id);

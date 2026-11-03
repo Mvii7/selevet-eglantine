@@ -86,7 +86,7 @@ void NSD::SetChangeEnvironmentIdentifierDisabled(HLERequestContext& ctx) {
 
     LOG_WARNING(Service, "(STUBBED) called, disabled={}", disabled);
 
-    IPC::ResponseBuilder rb{ctx, 2};
+    IPC::ResponseBuilder rb{ctx, 1};
     rb.Push(ResultSuccess);
 }
 
@@ -114,7 +114,7 @@ void NSD::ResolveEx(HLERequestContext& ctx) {
     }
 
     ctx.WriteBuffer(fqdn_out);
-    IPC::ResponseBuilder rb{ctx, 3};
+    IPC::ResponseBuilder rb{ctx, 4};
     rb.Push(ResultSuccess);
     rb.Push(ResultSuccess);
 }

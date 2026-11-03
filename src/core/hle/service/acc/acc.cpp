@@ -696,9 +696,9 @@ public:
             {4, &IManagerForApplication::LoadIdTokenCache, "LoadIdTokenCache"},
             {130, &IManagerForApplication::GetNintendoAccountUserResourceCacheForApplication, "GetNintendoAccountUserResourceCacheForApplication"},
             {136, &IManagerForApplication::GetNintendoAccountUserResourceCacheForApplication, "GetNintendoAccountUserResourceCache"}, // 19.0.0+
-            {150, &IManagerForApplication::StubReplyInterface, "CreateAuthorizationRequest"},
+            {150, nullptr, "CreateAuthorizationRequest"},
             {160, &IManagerForApplication::StoreOpenContext, "StoreOpenContext"},
-            {170, &IManagerForApplication::StubReplyInterface, "LoadNetworkServiceLicenseKindAsync"},
+            {170, nullptr, "LoadNetworkServiceLicenseKindAsync"},
         };
         // clang-format on
 

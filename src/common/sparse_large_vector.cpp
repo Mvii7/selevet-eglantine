@@ -39,12 +39,12 @@ static LONG WINAPI FakePageFaultHandler(PEXCEPTION_POINTERS info) {
         std::lock_guard lock(vector_regions_mutex);
         for (auto region: vector_regions) {
             auto addr_shifted = exception_addr >> HostPageBits;
-            if (region.first <= addr_shifted && addr_shifted < region.second) {
+            if (region.first <= addr_shifted && addr_shifted <= region.second) {
                 addr = addr_shifted;
             }
 
             // Page-boundary accesses
-            if (auto addr_ = (exception_addr + 0x40) >> HostPageBits; addr_ != addr_shifted && region.first <= addr_ && addr_ < region.second) {
+            if (auto addr_ = (exception_addr + 0x40) >> HostPageBits; addr_ != addr_shifted && region.first <= addr_ && addr_ <= region.second) {
                 addr2 = addr_;
             }
 
@@ -164,8 +164,7 @@ void FreeMemoryPages(void* base, [[maybe_unused]] std::size_t size) noexcept {
         return;
 #ifdef _WIN32
     std::lock_guard lock(vector_regions_mutex);
-    // Regions are kept in host pages.
-    std::erase_if(vector_regions, [base](const auto& r) {return r.first == reinterpret_cast<u64>(base) >> HostPageBits; });
+    std::erase_if(vector_regions, [base](const auto& r) {return r.first == reinterpret_cast<u64>(base); });
     ASSERT(VirtualFree(base, 0, MEM_RELEASE));
 #else
     ASSERT(munmap(base, size) == 0);

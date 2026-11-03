@@ -25,13 +25,9 @@ public:
     }
 
 private:
-    // The reply is 12 bytes; only the first word (the scale) is known. The other two used to be
-    // left to the message buffer's leftovers.
-    Result GetCurrentGraphicsScale(Out<u32> out_scale, Out<u32> out_unknown1, Out<u32> out_unknown2) {
+    Result GetCurrentGraphicsScale(Out<u32> out_scale) {
         LOG_WARNING(Service_AM, "(STUBBED) called, returning 10");
         *out_scale = 10;
-        *out_unknown1 = 0;
-        *out_unknown2 = 0;
         R_SUCCEED();
     }
 };

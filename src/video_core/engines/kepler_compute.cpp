@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <bit>
 #include <bitset>
 #include <cstdlib>
 #include <fstream>
@@ -562,7 +561,6 @@ bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& 
             // The console runs this on tensor cores; stand in with a plain upscale of its input.
             return UpscaleInsteadOfNativeProgram();
         }
-        RememberDlssMotionVectors();
         return false;
     }
     return true;
@@ -613,38 +611,10 @@ void KeplerCompute::DescribeNativeResources(const NativeQmdScheduler::Descriptor
 
 std::atomic<u32> g_nx2_trace_draws_after_upscale{};
 
-// Fire Emblem: Fortune's Weave's first DLSS pass (rejected, before the network) has the input colour
-// at cbuf0+0x278, its motion vectors (R16G16 float, the input's size) at +0x290 and this frame's
-// camera jitter (x, y; input pixels, Halton bases 2 and 3 less 0.5) at +0x1b0.
-void KeplerCompute::RememberDlssMotionVectors() {
-    const auto& cbuf = launch_description.const_buffer_config[0];
-    if (cbuf.size.Value() < 0x294) return;
-    const GPUVAddr cbuf_address = (GPUVAddr{cbuf.address_high} << 32) | cbuf.address_low;
-    const auto image = [&](u32 offset) -> std::optional<Texture::TICEntry> {
-        const u32 tic_index = memory_manager.Read<u32>(cbuf_address + offset) & 0xfffff;
-        if (tic_index > regs.tic.limit) return std::nullopt;
-        return GetTICEntry(tic_index);
-    };
-    const auto color = image(0x278), motion = image(0x290);
-    if (!color || !motion || color->format != Texture::TextureFormat::B10G11R11 ||
-        motion->format != Texture::TextureFormat::R16G16 || motion->Address() == 0 ||
-        motion->Width() != color->Width() || motion->Height() != color->Height() ||
-        !motion->IsBlockLinear())
-        return;
-    dlss_motion_vectors = *motion;
-    dlss_motion_color = color->Address();
-    dlss_jitter = {std::bit_cast<f32>(memory_manager.Read<u32>(cbuf_address + 0x1b0)),
-                   std::bit_cast<f32>(memory_manager.Read<u32>(cbuf_address + 0x1b4))};
-}
-
 // Title 4's upscaler reads the tonemapped frame through the texture handle at cbuf0+0x90 and
 // writes the output resolution image through the surface handle at cbuf0+0xa0 (from its
-// TLD/SUST operands). Kirby Air Riders' reads a 2048x1152 image at cbuf0+0x80 and writes a
-// 2560x1440 one at +0x90; Fire Emblem: Fortune's Weave's DLSS network ends with a pass that reads
-// the input colour through cbuf0+0x328 and writes the DLSS output through cbuf0+0x348 (B10G11R11;
-// 720p to 1440p docked). Blit one to the other with bilinear filtering when both are plain 2D
-// images of the same format and the output is larger: title 4's slots first, then Fortune's
-// Weave's, else the first two handles in cbuf0+0x80..0x11c that form such a pair.
+// TLD/SUST operands). Blit one to the other with bilinear filtering when both are plain 2D images
+// of the same format and the output is larger.
 bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
     const auto& cbuf = launch_description.const_buffer_config[0];
     const GPUVAddr cbuf_address = (GPUVAddr{cbuf.address_high} << 32) | cbuf.address_low;
@@ -653,43 +623,21 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
         if (tic_index > regs.tic.limit) return std::nullopt;
         return GetTICEntry(tic_index);
     };
-    const auto upscale_pair = [](const std::optional<Texture::TICEntry>& from,
-                                 const std::optional<Texture::TICEntry>& to) {
-        return from && to && from->format == to->format && from->Address() != 0 &&
-               to->Address() != 0 && to->Width() > from->Width() && from->IsBlockLinear() &&
-               to->IsBlockLinear();
+    const auto usable = [](const std::optional<Texture::TICEntry>& in,
+                           const std::optional<Texture::TICEntry>& out) {
+        return in && out && in->format == out->format && in->Address() != 0 &&
+               out->Address() != 0 && out->Width() > in->Width() && in->IsBlockLinear() &&
+               out->IsBlockLinear();
     };
-    std::optional<Texture::TICEntry> input = image(0x90), output = image(0xa0);
-    bool fortunes_weave = false;
-    if (!upscale_pair(input, output)) {
-        input = image(0x328);
-        output = image(0x348);
-        fortunes_weave = upscale_pair(input, output);
-    }
     // Title 4's version 458752 keeps the pair at cbuf0+0x60 (1280x720) and +0x70 (1920x1080); the
     // screen stayed the output's clear colour (blue) until camera mode skipped the pass.
-    if (!upscale_pair(input, output)) {
-        input = image(0x60);
-        output = image(0x70);
+    std::optional<Texture::TICEntry> input, output;
+    for (const auto [in_offset, out_offset] : {std::pair{0x90U, 0xa0U}, std::pair{0x60U, 0x70U}}) {
+        input = image(in_offset);
+        output = image(out_offset);
+        if (usable(input, output)) break;
     }
-    if (!upscale_pair(input, output)) {
-        input.reset();
-        output.reset();
-        for (u32 first = 0x80; first < 0x120 && !input; first += 4) {
-            const auto from = memory_manager.Read<u32>(cbuf_address + first) != 0 ? image(first)
-                                                                                    : std::nullopt;
-            for (u32 second = first + 4; from && second < 0x120; second += 4) {
-                if (memory_manager.Read<u32>(cbuf_address + second) == 0) continue;
-                const auto to = image(second);
-                if (upscale_pair(from, to)) {
-                    input = from;
-                    output = to;
-                    break;
-                }
-            }
-        }
-    }
-    if (!input || !output)
+    if (!usable(input, output))
         return false;
     using RTFormat = Tegra::RenderTargetFormat;
     RTFormat format{};
@@ -787,24 +735,7 @@ bool KeplerCompute::UpscaleInsteadOfNativeProgram() {
             source.format = static_cast<RTFormat>(std::strtoul(value, nullptr, 16));
         }
     }
-    // Fortune's Weave: a temporal upscale along its motion vectors that undoes this frame's camera
-    // jitter (both from the frame's first DLSS pass) and accumulates the frames as DLSS would.
-    // EDEN_NX2_TEMPORAL_UPSCALE=0 blits instead.
-    const auto upscale_temporally = [&] {
-        static const bool enabled = [] {
-            const char* value = std::getenv("EDEN_NX2_TEMPORAL_UPSCALE");
-            return value == nullptr || std::string_view{value} != "0";
-        }();
-        if (!fortunes_weave || !enabled || !dlss_motion_vectors ||
-            dlss_motion_color != input->Address())
-            return false;
-        Fermi2D::Surface motion = surface(*dlss_motion_vectors);
-        motion.format = RTFormat::R16G16_FLOAT;
-        return rasterizer->AccelerateTemporalUpscale(source, surface(*output), motion, dlss_jitter,
-                                                     {1.0f, 1.0f});
-    };
-    const bool done = upscale_temporally() ||
-                      rasterizer->AccelerateSurfaceCopy(source, surface(*output), config);
+    const bool done = rasterizer->AccelerateSurfaceCopy(source, surface(*output), config);
     if (static u32 checked{}; checked++ == sample_at) {
         const u64 size = u64{output->Width()} * output->Height() * 4;
         if (const auto device = memory_manager.GpuToCpuAddress(output->Address())) {

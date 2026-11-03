@@ -61,33 +61,24 @@ namespace {
 
 constexpr size_t CONSTANT_POOL_SIZE = 2 * 1024 * 1024;
 constexpr size_t PRELUDE_COMMIT_SIZE = 16 * 1024 * 1024;
-#ifdef _WIN32
-constexpr size_t COMMIT_STEP = 4 * 1024 * 1024;
 
-// Reserves the code space; EnsureMemoryCommitted commits it as code is emitted. Xbyak's default
-// allocator commits all of it up front: 512 MiB per core, 3 GiB of commit charge for six cores
-// of which a game fills a fraction.
-struct ReservingAllocator final : Xbyak::Allocator {
-    uint8_t* alloc(size_t size) override {
-        return static_cast<uint8_t*>(VirtualAlloc(nullptr, size, MEM_RESERVE, PAGE_NOACCESS));
+#ifdef _WIN32
+class CodeMemoryAllocator final : public Xbyak::Allocator {
+public:
+    u8* alloc(size_t size) override {
+        return static_cast<u8*>(VirtualAlloc(nullptr, size, MEM_RESERVE, PAGE_NOACCESS));
     }
-    void free(uint8_t* p) override {
-        VirtualFree(p, 0, MEM_RELEASE);
+
+    void free(u8* memory) override {
+        VirtualFree(memory, 0, MEM_RELEASE);
     }
+
     bool useProtect() const override {
         return false;
     }
 };
 
-Xbyak::Allocator* CodeAllocator() {
-    // Never destroyed: code blocks may outlive static destruction.
-    static auto* const allocator = new ReservingAllocator;
-    return allocator;
-}
-#else
-Xbyak::Allocator* CodeAllocator() {
-    return nullptr;
-}
+CodeMemoryAllocator code_memory_allocator;
 #endif
 
 #ifdef DYNARMIC_ENABLE_NO_EXECUTE_SUPPORT
@@ -186,7 +177,11 @@ BlockOfCode::BlockOfCode(RunCodeCallbacks cb, JitStateInfo jsi, size_t total_cod
 #else
         , nullptr //Allow RWE
 #endif
-        , CodeAllocator())
+#ifdef _WIN32
+        , &code_memory_allocator)
+#else
+        , nullptr)
+#endif
     , constant_pool(*this, CONSTANT_POOL_SIZE)
     , jsi(jsi)
     , cb(std::move(cb))
@@ -243,10 +238,7 @@ size_t BlockOfCode::SpaceRemaining() const {
 void BlockOfCode::EnsureMemoryCommitted([[maybe_unused]] size_t codesize) {
 #ifdef _WIN32
     if (committed_size < size_ + codesize) {
-        // The code space is only reserved (CodeAllocator), so everything up to the end of the next
-        // emission has to be committed; in steps, as each VirtualAlloc call is a kernel call.
-        const size_t new_committed_size =
-            std::min<size_t>(maxSize_, (std::max)(committed_size + COMMIT_STEP, size_ + codesize));
+        const size_t new_committed_size = std::min<size_t>(maxSize_, committed_size + codesize);
 #    ifdef DYNARMIC_ENABLE_NO_EXECUTE_SUPPORT
         void* const memory = VirtualAlloc(top_, new_committed_size, MEM_COMMIT, PAGE_READWRITE);
 #    else

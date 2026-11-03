@@ -161,7 +161,7 @@ ENUM(ExtendedDynamicState, Disabled, EDS1, EDS2, EDS3);
 ENUM(GpuLogLevel, Off, Errors, Standard, Verbose, All)
 ENUM(GameListMode, TreeView, GridView, CarouselView);
 ENUM(SpeedMode, Standard, Turbo, Slow);
-ENUM(FrameGenType, Lsfg, Fsr3, NvOpticalFlow);
+ENUM(FrameGenType, Lsfg, Fsr3);
 
 template <typename Type>
 inline std::string_view CanonicalizeEnum(Type id) {

@@ -10,7 +10,6 @@
 #include "video_core/renderer_vulkan/present/lsfg_chain.h"
 #include "video_core/renderer_vulkan/present/lsfg_shaders.h"
 #include "video_core/renderer_vulkan/present/fsr3_frame_gen.h"
-#include "video_core/renderer_vulkan/present/nv_optical_flow_frame_gen.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 
 namespace Vulkan {
@@ -33,20 +32,6 @@ public:
     void GenerateInto(const Device& device, Frame* destination, size_t generation);
 
 private:
-    enum class Backend : u8 {
-        Lsfg,
-        Fsr3,
-        NvOpticalFlow,
-    };
-
-    /// NVIDIA optical flow is used when it is selected, the GPU supports it and it has not
-    /// failed earlier in this session.
-    [[nodiscard]] bool UseNvOpticalFlow() const;
-    /// FSR3 is used when it is selected, when Lossless Scaling frame generation was selected but
-    /// its shaders are not available (no Lossless.dll installed), and as the fallback when the
-    /// NVIDIA optical flow backend is selected but unavailable.
-    [[nodiscard]] bool UseFsr3() const;
-    [[nodiscard]] Backend CurrentBackend() const;
     void Rebuild(const Device& device, VkExtent2D extent, VkFormat format, f32 flow_scale);
     void DumpDebugImages(u64 count);
 
@@ -56,13 +41,11 @@ private:
     std::optional<LsfgShaders> shaders;
     std::optional<LsfgChain> chain;
     std::optional<Fsr3FrameGen> fsr3_chain;
-    std::optional<NvOpticalFlowFrameGen> nvof_chain;
     FrameGenPacer pacer;
     FrameGenPlan plan{};
     VkExtent2D peak_guest_extent{};
     VkExtent2D built_extent{};
     VkFormat built_format{VK_FORMAT_UNDEFINED};
-    Backend built_backend{Backend::Fsr3};
     f32 built_flow_scale{};
     u64 frame_count{};
     u64 last_count{};
@@ -71,12 +54,6 @@ private:
     bool generated{};
     bool unavailable{};
     bool dumped{};
-    bool logged_no_storage{};
-    bool logged_lsfg_fallback{};
-    bool logged_nvof_fallback{};
-    bool nvof_supported{};
-    bool nvof_failed{};
-    u64 log_counter{};
 };
 
 } // namespace Vulkan

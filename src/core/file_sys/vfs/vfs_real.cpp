@@ -114,6 +114,7 @@ VfsEntryType RealVfsFilesystem::GetEntryType(std::string_view path_) const {
 }
 
 VirtualFile RealVfsFilesystem::OpenFileFromEntry(std::string_view path_, std::optional<u64> size,
+                                                 std::optional<std::string> parent_path,
                                                  OpenMode perms) {
     const auto path = FS::SanitizePath(path_, FS::DirectorySeparator::PlatformDefault);
     std::scoped_lock lk{list_lock};
@@ -131,14 +132,14 @@ VirtualFile RealVfsFilesystem::OpenFileFromEntry(std::string_view path_, std::op
     auto reference = std::make_unique<FileReference>();
     this->InsertReferenceIntoListLocked(*reference);
 
-    auto file = std::make_shared<RealVfsFile>(*this, std::move(reference), path, perms, size);
+    auto file = std::make_shared<RealVfsFile>(*this, std::move(reference), path, perms, size, std::move(parent_path));
     cache[path] = file;
 
     return file;
 }
 
 VirtualFile RealVfsFilesystem::OpenFile(std::string_view path_, OpenMode perms) {
-    return OpenFileFromEntry(path_, {}, perms);
+    return OpenFileFromEntry(path_, {}, {}, perms);
 }
 
 VirtualFile RealVfsFilesystem::CreateFile(std::string_view path_, OpenMode perms) {
@@ -256,8 +257,7 @@ std::unique_lock<std::mutex> RealVfsFilesystem::RefreshReference(const std::stri
     return lk;
 }
 
-void RealVfsFilesystem::DropReference(std::unique_ptr<FileReference>&& reference,
-                                      const std::string& path) {
+void RealVfsFilesystem::DropReference(std::unique_ptr<FileReference>&& reference) {
     if (in_dtor)
         return;
 
@@ -265,11 +265,6 @@ void RealVfsFilesystem::DropReference(std::unique_ptr<FileReference>&& reference
 
     // Remove from list.
     this->RemoveReferenceFromListLocked(*reference);
-
-    // Forget the path, unless it was opened again since this file's last reference went away.
-    if (const auto it = cache.find(path); it != cache.end() && it->second.expired()) {
-        cache.erase(it);
-    }
 
     // Close the file.
     if (reference->file) {
@@ -314,11 +309,14 @@ void RealVfsFilesystem::RemoveReferenceFromListLocked(FileReference& reference) 
 }
 
 RealVfsFile::RealVfsFile(RealVfsFilesystem& base_, std::unique_ptr<FileReference> reference_,
-                         const std::string& path_, OpenMode perms_, std::optional<u64> size_)
-    : base(base_), reference(std::move(reference_)), path(path_), size(size_), perms(perms_) {}
+                         const std::string& path_, OpenMode perms_, std::optional<u64> size_,
+                         std::optional<std::string> parent_path_)
+    : base(base_), reference(std::move(reference_)), path(path_),
+      parent_path(parent_path_ ? std::move(*parent_path_) : FS::GetParentPath(path_)),
+      path_components(FS::SplitPathComponentsCopy(path_)), size(size_), perms(perms_) {}
 
 RealVfsFile::~RealVfsFile() {
-    base.DropReference(std::move(reference), path);
+    base.DropReference(std::move(reference));
 }
 
 std::string RealVfsFile::GetName() const {
@@ -327,14 +325,7 @@ std::string RealVfsFile::GetName() const {
         return FS::Android::GetFilename(path);
     }
 #endif
-    // The last path component.
-    const auto end = path.find_last_not_of("\\/");
-    if (end == std::string::npos) {
-        return "";
-    }
-    const auto separator = path.find_last_of("\\/", end);
-    const auto begin = separator == std::string::npos ? 0 : separator + 1;
-    return path.substr(begin, end + 1 - begin);
+    return path_components.empty() ? "" : std::string(path_components.back());
 }
 
 std::size_t RealVfsFile::GetSize() const {
@@ -352,7 +343,7 @@ bool RealVfsFile::Resize(std::size_t new_size) {
 }
 
 VirtualDir RealVfsFile::GetContainingDirectory() const {
-    return base.OpenDirectory(FS::GetParentPath(path), perms);
+    return base.OpenDirectory(parent_path, perms);
 }
 
 bool RealVfsFile::IsWritable() const {
@@ -381,7 +372,7 @@ std::size_t RealVfsFile::Write(const u8* data, std::size_t length, std::size_t o
 }
 
 bool RealVfsFile::Rename(std::string_view name) {
-    return base.MoveFile(path, FS::GetParentPath(path) + '/' + std::string(name)) != nullptr;
+    return base.MoveFile(path, parent_path + '/' + std::string(name)) != nullptr;
 }
 
 // TODO(DarkLordZach): MSVC would not let me combine the following two functions using 'if
@@ -399,7 +390,7 @@ std::vector<VirtualFile> RealVfsDirectory::IterateEntries<RealVfsFile, VfsFile>(
                                            &out](const std::filesystem::directory_entry& entry) {
         const auto full_path_string = FS::PathToUTF8String(entry.path());
 
-        out.emplace_back(base.OpenFileFromEntry(full_path_string, entry.file_size(), perms));
+        out.emplace_back(base.OpenFileFromEntry(full_path_string, entry.file_size(), path, perms));
 
         return true;
     };

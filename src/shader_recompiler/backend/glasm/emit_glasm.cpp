@@ -341,9 +341,6 @@ std::string_view StageHeader(Stage stage) {
         return "!!NVfp5.0\n";
     case Stage::Compute:
         return "!!NVcp5.0\n";
-    case Stage::Task:
-    case Stage::Mesh:
-        break;
     }
     throw InvalidArgument("Invalid stage {}", stage);
 }

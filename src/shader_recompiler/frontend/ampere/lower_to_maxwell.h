@@ -44,8 +44,7 @@ struct LoweredProgram {
 // Lower only operations whose semantics are representable by the existing
 // Maxwell frontend. These are new instructions, not reinterpretations of the
 // native bytes. Scheduling/control words are added by the environment adapter.
-inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code, bool geometry_stage = false,
-                                     bool mesh_stage = false) {
+inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code, bool geometry_stage = false) {
     LoweredProgram result;
     struct Relocation { u32 output_index; s64 target; };
     std::vector<Relocation> relocations;
@@ -906,11 +905,6 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code, bool geo
             emit(0x3828000000000000ULL | predicate | (dest + 216) | (u64{insn.words[1] + 216} << 8) |
                  (u64{1} << 39) | (u64{1} << 40));
             break;
-        case 0x2bf: // UPOPC, as POPC of the uniform's register (build-131; Pokopia's mesh shadows).
-            if (dest >= 16 || insn.words[1] >= 16 || insn.words[2] != 0x08000000 || native_predicate != 7)
-                return fail(index, "native uniform population count mode");
-            emit(0x5c08000000000000ULL | predicate | (dest + 216) | (u64{insn.words[1] + 216} << 20));
-            break;
         case 0x3a1: { // MATCH.ALL with only the all-equal predicate retained.
             const u32 source = insn.Bits(24, 8), target = insn.Bits(81, 3);
             const u32 words = insn.Bits(73, 1) ? 2U : 1U;
@@ -1439,14 +1433,14 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code, bool geo
             if ((!half && !small && !byte && !word) ||
                 ((byte || small || extended_word) &&
                  (insn.Bits(24, 8) || (insn.words[3] & 0xc00001ffU) ||
+                  (opcode == 0xb05 && insn.Bits(62, 2)) ||
                   insn.Bits(91, 1) != static_cast<u32>(opcode == 0xd05))) ||
                 (opcode != 0xb05 && (insn.words[1] & 0xffffff00U)) ||
                 (opcode == 0xd05 && uniform_register(insn.Bits(32, 8)) == ~0U)) {
                 return fail(index, "native float-to-integer conversion mode");
             }
             const bool is_signed = insn.Bits(72, 1);
-            // Constant-buffer source: bit 62 |c|, bit 63 -c (Pokopia's shadow pass reads |c[3][0xd0]|).
-            u32 source = opcode == 0xb05 ? materialize(2, 0, 252, insn.Bits(62, 1), insn.Bits(63, 1))
+            u32 source = opcode == 0xb05 ? materialize(2, 0, 252, false, false)
                        : opcode == 0xd05 ? uniform_register(insn.Bits(32, 8)) : insn.Bits(32, 8);
             if (half) {
                 extract_half({source, 2, false, false}, 0, 252);
@@ -1998,28 +1992,8 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code, bool geo
             }
             break;
         }
-        case 0x923: case 0x927:
-            if (mesh_stage) {
-                // ISBERD / ISBEWR in task and mesh programs (from Djihads80 build-131): the stage
-                // buffer. Ampere: Ra 24-31, offset 40-63, ISBERD dest 16-23, ISBEWR data 32-39;
-                // 75 = .32 (else U8), 76-77 = 3 .ATTR (0 the map region), 78 = .SKEW, 79 = .O
-                // (the output buffer). Kept as an nx2 pseudo instruction (Maxwell 0xefc0, free
-                // there) that the frontend reads for the task or mesh stage: data/dest 0-7, Ra
-                // 8-15, offset 20-43, .32 44, .ATTR 45, .SKEW 46, .O 47, write 48.
-                const bool write = opcode == 0x927;
-                const u32 region = insn.Bits(76, 2);
-                const bool output = insn.Bits(79, 1) != 0;
-                if ((insn.words[2] & ~0xf800U) != 0 || (region != 0 && region != 3) ||
-                    write != output || (!write && region != 3) || (!write && dest == 255))
-                    return fail(index, "native stage buffer access mode");
-                emit(0xefc0000000000000ULL | predicate | (write ? u64{insn.Bits(32, 8)} : dest) |
-                     (u64{insn.Bits(24, 8)} << 8) | (u64{insn.Bits(40, 24)} << 20) |
-                     (u64{insn.Bits(75, 1)} << 44) | (u64{region == 3} << 45) |
-                     (u64{insn.Bits(78, 1)} << 46) | (u64{output} << 47) | (u64{write} << 48));
-                break;
-            }
-            if (opcode == 0x927 || !geometry_stage)
-                return fail(index, "native stage buffer read outside geometry stage");
+        case 0x923:
+            if (!geometry_stage) return fail(index, "native stage buffer read outside geometry stage");
             if (insn.words[1] || insn.words[2] || insn.Bits(24, 8) == 255)
                 return fail(index, "native stage buffer read mode");
             emit(base(0x5c98000000000000ULL) | (u64{15} << 39) | (u64{insn.Bits(24, 8)} << 20));
@@ -2616,10 +2590,7 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code, bool geo
                 (code[index + 1].words[3] & 0xc00001ffU) == 0 &&
                 (std::none_of(code.begin(), code.end(), [](const Instruction& candidate) {
                     return candidate.Bits(0, 12) == 0x950;
-                }) || terminal_float_tail() ||
-                 // A loop exit to its BSYNC: no link register was set, so the program's RETs
-                 // (they return through one) never come back here (Pokopia's shadowed pixels).
-                 code[index + 2].Bits(0, 12) == 0x941)) {
+                }) || terminal_float_tail())) {
                 relocations.push_back({static_cast<u32>(result.instructions.size()), index + 2});
                 emit(0xe24000000000000fULL | predicate);
                 break;

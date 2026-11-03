@@ -5,7 +5,6 @@
 // SPDX-FileCopyrightText: 2021 Skyline Team and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include <cstdlib>
 #include <cstring>
 #include <cstdlib>
 #include <optional>
@@ -40,13 +39,6 @@ nvhost_as_gpu::nvhost_as_gpu(Core::System& system_, Module& module_, NvCore::Con
 
 nvhost_as_gpu::~nvhost_as_gpu() {
     Nx2GpuMemoryRegistry::Get().RemoveListener(this);
-    // Leave shared ranges to the process's other address spaces; like this address space's own
-    // ranges, one nobody else maps stays allocated.
-    for (const auto& [key, range] : nx2_device_ranges) {
-        if (range.shared) {
-            Nx2GpuMemoryRegistry::Get().ReleaseDeviceRange(range.asid, key.first, key.second);
-        }
-    }
 }
 
 NvResult nvhost_as_gpu::Ioctl1(DeviceFD fd, Ioctl command, std::span<const u8> input,
@@ -162,41 +154,25 @@ void nvhost_as_gpu::Nx2Map(u64 gpu_address, u64 cpu_address, u64 size) {
         return cpu_address >= start && cpu_address - start <= length &&
                size <= length - (cpu_address - start);
     });
-    Nx2DeviceRange range{};
     if (backing != nx2_device_ranges.end()) {
         const auto it = backing;
         device_address = it->second.address + (cpu_address - it->first.first);
         heap = it->second.heap;
     } else if (session->has_preallocated_area && session->mapper->IsInBounds(cpu_address, size)) {
-        range = {session->mapper->Map(cpu_address, size), true};
+        device_address = session->mapper->Map(cpu_address, size);
+        heap = true;
     } else {
-        const auto allocate = [&]() -> u64 {
-            auto& smmu = system.Host1x().MemoryManager();
-            const DAddr address = smmu.Allocate(Common::AlignUp(size, 0x20000));
-            if (address != 0) {
-                smmu.Map(address, cpu_address, size, session->asid, true);
-            }
-            return address;
-        };
-        // EDEN_NX2_PRIVATE_DEVICE_RANGES=1 (A/B aid): a range per address space.
-        static const bool private_ranges = std::getenv("EDEN_NX2_PRIVATE_DEVICE_RANGES") != nullptr;
-        if (private_ranges) {
-            range = {allocate(), false};
-        } else {
-            range = {Nx2GpuMemoryRegistry::Get().AcquireDeviceRange(session->asid.id, cpu_address,
-                                                                    size, allocate),
-                     false, true, session->asid.id};
-        }
-        if (range.address == 0) {
+        auto& smmu = system.Host1x().MemoryManager();
+        device_address = smmu.Allocate(Common::AlignUp(size, 0x20000));
+        if (device_address == 0) {
             LOG_CRITICAL(Service_NVDRV, "Switch 2 GPU memory {:#x}+{:#x}: out of SMMU space",
                          cpu_address, size);
             return;
         }
+        smmu.Map(device_address, cpu_address, size, session->asid, true);
     }
     if (backing == nx2_device_ranges.end()) {
-        device_address = range.address;
-        heap = range.heap;
-        nx2_device_ranges[{cpu_address, size}] = range;
+        nx2_device_ranges[{cpu_address, size}] = {device_address, heap};
     }
     Nx2GpuMemoryRegistry::Get().RecordDeviceRange(cpu_address, size, device_address);
     static const bool trace_native_image = std::getenv("EDEN_NX2_IMAGE_TRACE") != nullptr;
@@ -244,10 +220,6 @@ void nvhost_as_gpu::Nx2Release(u64 cpu_address, u64 size) {
             return false;
         }
         const auto range = entry.second;
-        if (range.shared &&
-            !Nx2GpuMemoryRegistry::Get().ReleaseDeviceRange(range.asid, start, length)) {
-            return true; // another address space of the process still maps it
-        }
         auto* const mapper = range.heap && session != nullptr ? session->mapper.get() : nullptr;
         system.GPU().RunInOrder([&smmu, mapper, range, start, length] {
             if (range.heap) {
@@ -294,7 +266,6 @@ void nvhost_as_gpu::Nx2Sparse(u64 gpu_address, u64 size, bool create) {
         return;
     }
     nx2_sparse_ranges[gpu_address] = {size, device_address};
-    // On the GPU thread, as in Nx2Map.
     system.GPU().RunInOrder([gmmu = gmmu.get(), gpu_address, device_address, size] {
         gmmu->Map(gpu_address, device_address, size, Tegra::PTEKind::PITCH, false);
     });
