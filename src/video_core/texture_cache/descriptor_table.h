@@ -7,6 +7,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdlib>
 #include <vector>
 
 #include "common/alignment.h"
@@ -32,6 +33,15 @@ public:
     void Invalidate() noexcept {
         // Cleared on the next read: the texture cache invalidates every channel's tables for
         // each image it deletes, dozens of times a frame while its collector runs.
+        // EDEN_NX2_LAZY_DESCRIPTORS=0 clears at once, as before.
+        static const bool lazy = [] {
+            const char* value = std::getenv("EDEN_NX2_LAZY_DESCRIPTORS");
+            return !value || value[0] != '0';
+        }();
+        if (!lazy) {
+            std::ranges::fill(read_descriptors, 0);
+            return;
+        }
         invalidated = true;
     }
 

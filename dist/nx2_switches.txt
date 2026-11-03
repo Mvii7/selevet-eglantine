@@ -7,6 +7,9 @@
 # Restart the emulator after editing.
 
 # --- workarounds / behaviour ---
+# The game maps its own memory into sparse regions: with it off, Mario Kart World, Pokopia and
+# Kirby Air Riders ran the graphics pool dry and drew black scenery, sky and shadows.
+EDEN_NX2_SPARSE_REMAP=1
 #EDEN_NX2_BUFFER_DOWNLOADS=1
 #EDEN_NX2_SPLIT=1
 #EDEN_NX2_MME_JIT=0

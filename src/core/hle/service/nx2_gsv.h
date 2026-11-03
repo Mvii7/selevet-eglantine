@@ -2417,6 +2417,8 @@ public:
             {8, &INx2VideoSession::Flush, "Flush"},
             {101, &INx2VideoSession::Configure, "Configure"},
             {109, &INx2VideoSession::SubmitInput, "SubmitInputBuffer"},
+            // An empty reply, as build-163's (Kirby Air Riders' aborts after movie stops were
+            // its gyro pointing on zero six-axis ranges, not this).
             {115, &INx2VideoSession::Succeed, "Finalize"},
             {200, &INx2VideoSession::Succeed, "Initialize"},
             {201, &INx2VideoSession::Succeed, "InitializeWithFlag"},
@@ -2489,6 +2491,11 @@ private:
         if (Nx2FirstVideoCommand(GetServiceName(), ctx.GetCommand())) {
             LOG_INFO(Service, "{} TIPC {} {} (first use): words {:08x}", GetServiceName(),
                      ctx.GetCommand(), what, fmt::join(std::span<const u32>{w, 12}, " "));
+        } else if (m_trace_calls > 0) {
+            // The calls after a stop or flush (Kirby Air Riders aborts right after one).
+            --m_trace_calls;
+            LOG_INFO(Service, "{} TIPC {} {} (after stop): words {:08x}", GetServiceName(),
+                     ctx.GetCommand(), what, fmt::join(std::span<const u32>{w, 12}, " "));
         } else {
             LOG_DEBUG(Service, "{} TIPC {} {}: [2]={:#x} [3]={:#x} [4]={:#x} [5]={:#x}",
                       GetServiceName(), ctx.GetCommand(), what, w[2], w[3], w[4], w[5]);
@@ -2513,6 +2520,7 @@ private:
         Log(ctx, "");
         TipcReplyWords(ctx, {});
     }
+
 
     void Configure(HLERequestContext& ctx) {
         const auto* w = ctx.CommandBuffer();
@@ -2632,6 +2640,10 @@ private:
         const u64 pts = u64{w[words]} | (u64{w[words + 1]} << 32);
         const bool end = (w[words + 2] & 0xFF) != 0;
         Log(ctx, "submit");
+        if (end) {
+            LOG_INFO(Service, "{} submit {} marks the end of stream (pts {} us)", GetServiceName(),
+                     m_submitted + 1, pts);
+        }
         Input input{{}, pts, end};
         if (!ctx.BufferDescriptorA().empty()) {
             const auto data = ctx.ReadBufferA(0);
@@ -2654,6 +2666,11 @@ private:
         Log(ctx, ctx.GetCommand() == 8 ? "flush" : "stop");
         {
             std::scoped_lock lk{m_mutex};
+            LOG_INFO(Service, "{} {} after {} frames out ({} inputs, {} decoded, {} finished "
+                              "not yet fetched, {} free queued, {} handed out)",
+                     GetServiceName(), ctx.GetCommand() == 8 ? "flush" : "stop", m_frames_out,
+                     m_inputs.size(), m_decoded.size(), m_outputs.size(), m_free.size(), m_handed);
+            m_trace_calls = 48;
             m_inputs.clear();
             m_flush = true;
             m_stream_ended = false;
@@ -2671,6 +2688,12 @@ private:
             if (!m_outputs.empty()) {
                 output = m_outputs.front();
                 m_outputs.pop_front();
+            } else if (m_empty_replies < 16) {
+                ++m_empty_replies;
+                LOG_INFO(Service, "{} 213 found no frame after {} out ({} inputs, {} decoded, "
+                                  "{} free queued, stream ended {})",
+                         GetServiceName(), m_frames_out, m_inputs.size(), m_decoded.size(),
+                         m_free.size(), m_stream_ended);
             }
         }
         if (!output) {
@@ -2680,6 +2703,10 @@ private:
             return;
         }
         const u64 pts_ns = output->pts * 1000;
+        if (m_trace_calls > 0) {
+            LOG_INFO(Service, "{} 213 hands out image {} (pts {} us, end {})", GetServiceName(),
+                     output->image, output->pts, output->end);
+        }
         TipcReplyWords(ctx, {output->image, output->width, output->height, output->width,
                              output->height, 0, static_cast<u32>(pts_ns),
                              static_cast<u32>(pts_ns >> 32), output->end ? 1U : 0U, 0, 0, 0, 0,
@@ -2903,6 +2930,8 @@ private:
     u32 m_height{};
     u32 m_handed{}; ///< Output images handed out (registered or released) so far
     u64 m_frames_out{};
+    u32 m_empty_replies{}; ///< 213 replies with no frame, logged (the first 16)
+    u32 m_trace_calls{};   ///< Calls still logged in full after a stop or flush
     std::deque<Input> m_inputs;
     std::deque<Decoded> m_decoded;     ///< Waiting for a free output image
     std::deque<u32> m_free;            ///< Output images, in the order the client acquires them

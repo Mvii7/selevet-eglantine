@@ -1042,7 +1042,13 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
     ++channel_state->uniform_cache_shots[0];
     // Bank 24 (root table 0, NVN2's push constants) is read from bank 17, which such games do not
     // bind: stream the table's current words as that buffer.
-    if (index == 17 && maxwell3d->root_tables.loaded && channel_state->uniform_buffers[stage][index].size == 0) {
+    // EDEN_NX2_ROOT_TABLES=0 leaves bank 17 to the blit constants, as in performance build 4.
+    static const bool root_tables = [] {
+        const char* value = std::getenv("EDEN_NX2_ROOT_TABLES");
+        return !value || value[0] != '0';
+    }();
+    if (index == 17 && root_tables && maxwell3d->root_tables.loaded &&
+        channel_state->uniform_buffers[stage][index].size == 0) {
         const auto& words = maxwell3d->root_tables.tables[0];
         const u32 size = (*channel_state->uniform_buffer_sizes)[stage][index];
         const u32 copied = (std::min)(size, static_cast<u32>(sizeof(words)));
