@@ -1024,6 +1024,48 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
             ++extra;
         }
     }
+    // Donkey Kong Bananza's hilltop colour pass is one small entry per rock, and the remembered
+    // set above keeps 1024 of them. The rest of that run waited on the GPU one rock at a time,
+    // so looking at the dense center fell off as more rocks streamed in. Take the rest of this
+    // submission's short entries in this same wait. A longer entry ends the run: it may dispatch
+    // the writes the entries after it read. EDEN_NX2_CMD_LOOKAHEAD=0 leaves them to the set.
+    static const bool lookahead = [] {
+        const char* value = std::getenv("EDEN_NX2_CMD_LOOKAHEAD");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (lookahead && size <= 64 * sizeof(u32) && !dma_pushbuffer.empty()) {
+        const auto& lists = dma_pushbuffer.front().command_lists;
+        const bool same_kind = dma_pushbuffer_subindex < lists.size() &&
+                               lists[dma_pushbuffer_subindex].is_push_buffer != 0;
+        size_t joined = 0;
+        for (size_t index = dma_pushbuffer_subindex + 1; index < lists.size(); ++index) {
+            const CommandListHeader& header = lists[index];
+            if (header.sync || header.size == 0 || header.size > 64 ||
+                (header.is_push_buffer != 0) != same_kind) {
+                break;
+            }
+            const GPUVAddr other_address = header.addr;
+            const size_t other_size = size_t{header.size} * sizeof(u32);
+            if (!Nx2HasGpuWrittenPage(other_address, other_size, [&](GPUVAddr page) {
+                    return memory_manager.GpuToCpuAddress(page);
+                })) {
+                break;
+            }
+            if (!memory_manager.IsMemoryDirty(other_address, other_size,
+                                             VideoCommon::CacheType::BufferCache)) {
+                continue;
+            }
+            memory_manager.FlushRegion(other_address, other_size, VideoCommon::CacheType::BufferCache);
+            ++joined;
+        }
+        extra += joined;
+        static bool logged_run = false;
+        if (!logged_run && joined >= 64) {
+            logged_run = true;
+            LOG_INFO(HW_GPU, "Command entries: {} more from this submission joined one GPU wait",
+                     joined);
+        }
+    }
     rasterizer->EndFlushBatch();
     CommandStats(2, std::chrono::steady_clock::now() - flush_start, address, size);
     CommandStats(3, {}, 0, extra);
