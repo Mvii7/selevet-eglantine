@@ -109,6 +109,19 @@ The CPU translator no longer uses AVX-512, even on CPUs that have it (`EDEN_NX2_
 
 The loader makes the Switch 2 SDK's `nn::vi::detail::DefaultDisplay::QueryVrrSupported` report VRR support, found by its exported name (`EDEN_NX2_REPORT_VRR=0` turns it off). Switch 2 draws skip a pipeline that is still being built instead of waiting for it when asynchronous shaders are on (`EDEN_NX2_ASYNC_SKIP=0`). `EDEN_NX2_VBLANK_ALIGN=1` holds late frames to the next 60 Hz vblank. A debug readback that froze the game once is off by default.
 
+## Performance build 7
+
+This line starts again from build 4. Builds 5 and 6 (the build-131 graphics merge, NVIDIA optical flow, and sparse tile mapping on by default) are not included: they were slower in Donkey Kong Bananza.
+
+NUP containers load, and a loose dump can be packed from the game list (`Convert to NUP...`) or with `eden-cli --pack-nup <dump> [<out.nup>]`. Building a loose RomFS no longer leaks a copy of every file, and the game list does not build that RomFS until something reads it.
+
+Donkey Kong Bananza's hilltop layer is a larger terrain than the earlier worlds. Two costs grew with it:
+
+- The pass that resets each rock and dirt piece's indirect draw wrote one 20-byte upload per piece, taking the buffer cache lock every time. Pieces that sit next to each other are now one upload. The first five of these draws log how many pieces became how many spans.
+- The colour pass reads each mesh's 5-word count back from the GPU. A small read now also takes the following GPU-written bytes in that run, up to 64 KiB, so the next meshes in the run do not each wait on the GPU. `EDEN_NX2_PBFLUSH_SPAN=0` restores one wait per read.
+
+Neither change has been timed in the hilltop layer. The reset log (`Indirect draw reset`) is the check that the spans collapsed.
+
 ## License and AI disclosure
 
 GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.

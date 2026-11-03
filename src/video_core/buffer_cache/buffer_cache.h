@@ -7,6 +7,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdlib>
 #include <memory>
 #include <numeric>
 #include <stdexcept>
@@ -233,8 +234,32 @@ std::optional<VideoCore::RasterizerDownloadArea> BufferCache<P>::GetFlushArea(DA
 
 template <class P>
 void BufferCache<P>::DownloadMemory(DAddr device_addr, u64 size) {
+    // A colour pass reads each terrain mesh's 5-word indirect record on its own. Those records
+    // sit in one GPU-written run, and every read waited on the host GPU. Take the run forward
+    // from this read (capped) so the following meshes find the words already in guest memory.
+    // EDEN_NX2_PBFLUSH_SPAN=0 restores one wait per read.
+    static const bool expand_small_reads = [] {
+        const char* value = std::getenv("EDEN_NX2_PBFLUSH_SPAN");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (expand_small_reads && size > 0 && size <= 64) {
+        if (const auto span = gpu_modified_ranges.Containing(device_addr)) {
+            constexpr u64 Cap = 64 * 1024;
+            const DAddr end = (std::min)(span->second, device_addr + Cap);
+            // Grow only. A shorter interval must not drop the rest of this read.
+            if (end > device_addr + size) {
+                size = end - device_addr;
+            }
+        }
+    }
     ForEachBufferInRange(device_addr, size, [&](BufferId, Buffer& buffer) {
-        DownloadBufferMemory(buffer, device_addr, size);
+        const DAddr buffer_start = buffer.CpuAddr();
+        const DAddr buffer_end = buffer_start + buffer.SizeBytes();
+        const DAddr start = (std::max)(buffer_start, device_addr);
+        const DAddr end = (std::min)(buffer_end, device_addr + size);
+        if (end > start) {
+            DownloadBufferMemory(buffer, start, end - start);
+        }
     });
 }
 

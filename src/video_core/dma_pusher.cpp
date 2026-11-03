@@ -415,6 +415,7 @@ bool DmaPusher::Step() {
                     return value == nullptr || value[0] != '0';
                 }();
                 bool flushed_parameters = false;
+                bool drained_parameters = false;
                 if (flush_parameters && words <= 64 &&
                     (!g_nx2_ampere.load(std::memory_order_relaxed) ||
                      Nx2HasGpuWrittenPage(dma_state.dma_get, words * sizeof(u32),
@@ -423,6 +424,7 @@ bool DmaPusher::Step() {
                                          }))) {
                     if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
                         split.Drain(VideoCommon::GpuSplit::DrainSite::MacroParameters);
+                        drained_parameters = true;
                     }
                     const GPUVAddr address = dma_state.dma_get;
                     const size_t bytes = words * sizeof(u32);
@@ -440,8 +442,11 @@ bool DmaPusher::Step() {
                     engine_state->current_dirty = false;
                 } else if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
                     // The caches behind IsMemoryDirty belong to the split's back thread.
+                    // A drain just above already made them current.
                     if (g_nx2_ampere.load(std::memory_order_relaxed)) {
-                        split.Drain(VideoCommon::GpuSplit::DrainSite::MacroParameters);
+                        if (!drained_parameters) {
+                            split.Drain(VideoCommon::GpuSplit::DrainSite::MacroParameters);
+                        }
                         engine_state->current_dirty = memory_manager.IsMemoryDirty(
                             dma_state.dma_get, words * sizeof(u32));
                     } else {

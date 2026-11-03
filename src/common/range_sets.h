@@ -4,6 +4,8 @@
 #pragma once
 
 #include <memory>
+#include <optional>
+#include <utility>
 
 #include "common/common_types.h"
 
@@ -28,6 +30,10 @@ public:
 
     /// Whether any range overlaps [base_address, base_address + size): one lookup.
     bool Intersects(AddressType base_address, size_t size) const;
+
+    /// The half-open interval that contains `address`, if one was added.
+    [[nodiscard]] std::optional<std::pair<AddressType, AddressType>> Containing(
+        AddressType address) const;
 
     template <typename Func>
     void ForEach(Func&& func) const;

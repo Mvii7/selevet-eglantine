@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <memory>
+#include <vector>
 #include <cstdio>
 #include <cstdlib>
 #include <tuple>
@@ -27,6 +29,7 @@
 #include "common/settings.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/gpu_logging/gpu_logging.h"
+#include "video_core/indirect_draw_reset.h"
 #include "video_core/control/channel_state.h"
 #include "video_core/native_query_trace.h"
 #include "video_core/readback_diagnostics.h"
@@ -343,21 +346,76 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                 std::vector<u64> pointers(count);
                 gpu_memory->ReadBlockUnsafe(list_begin, pointers.data(), list_bytes);
                 static constexpr std::array<u32, 5> record{0, 1, 0, 0, 0};
-                const std::span<const u8> bytes{reinterpret_cast<const u8*>(record.data()),
-                                                sizeof(record)};
+                // Same switch as AccelerateInlineToMemory. A GPU-modified record is uploaded now;
+                // anything else waits for the next FlushCaching.
+                static const bool defer_inline = [] {
+                    const char* value = std::getenv("EDEN_NX2_INLINE_DEFER");
+                    return value == nullptr || value[0] != '0';
+                }();
+                std::vector<VideoCommon::IndirectResetPiece> pieces;
+                pieces.reserve(count);
                 u32 written = 0;
                 for (const u64 pointer : pointers) {
                     if (pointer == 0 || !gpu_memory->IsFullyMappedRange(pointer, sizeof(record))) {
                         continue;
                     }
-                    AccelerateInlineToMemory(pointer, sizeof(record), bytes);
-                    ++written;
+                    const auto cpu = gpu_memory->GpuToCpuAddress(pointer);
+                    if (!cpu) {
+                        gpu_memory->WriteBlock(pointer, record.data(), sizeof(record));
+                        ++written;
+                        continue;
+                    }
+                    pieces.push_back(VideoCommon::IndirectResetPiece{pointer, *cpu});
+                }
+                std::vector<VideoCommon::IndirectResetSpan> spans;
+                VideoCommon::CoalesceIndirectResetPieces(pieces, sizeof(record), spans);
+                std::vector<u8> payload;
+                std::vector<VideoCommon::IndirectResetSpan> cache_spans;
+                cache_spans.reserve(spans.size());
+                {
+                    std::scoped_lock lock{buffer_cache.mutex};
+                    for (const VideoCommon::IndirectResetSpan& span : spans) {
+                        const size_t bytes = size_t{span.count} * sizeof(record);
+                        payload.resize(bytes);
+                        std::memcpy(payload.data(), record.data(), sizeof(record));
+                        size_t filled = sizeof(record);
+                        while (filled * 2 <= bytes) {
+                            std::memcpy(payload.data() + filled, payload.data(), filled);
+                            filled *= 2;
+                        }
+                        if (filled < bytes) {
+                            std::memcpy(payload.data() + filled, payload.data(), bytes - filled);
+                        }
+                        gpu_memory->WriteBlockUnsafe(span.gpu, payload.data(), bytes);
+                        const bool uploaded = buffer_cache.InlineMemory(span.cpu, bytes, payload);
+                        if (!uploaded && !defer_inline) {
+                            buffer_cache.WriteMemory(span.cpu, bytes);
+                        }
+                        if (uploaded || !defer_inline) {
+                            cache_spans.push_back(span);
+                        } else {
+                            gpu_memory->AccumulateInvalidation(span.gpu, bytes);
+                        }
+                        written += span.count;
+                    }
+                }
+                for (const VideoCommon::IndirectResetSpan& span : spans) {
+                    query_cache.InvalidateRegion(span.cpu, size_t{span.count} * sizeof(record));
+                }
+                if (!cache_spans.empty()) {
+                    std::scoped_lock lock{texture_cache.mutex};
+                    for (const VideoCommon::IndirectResetSpan& span : cache_spans) {
+                        const size_t bytes = size_t{span.count} * sizeof(record);
+                        texture_cache.WriteMemory(span.cpu, bytes);
+                        pipeline_cache.InvalidateRegion(span.cpu, bytes);
+                    }
                 }
                 static u32 reset_logs{};
                 if (reset_logs < 5) {
                     ++reset_logs;
-                    LOG_INFO(HW_GPU, "Indirect draw reset: list {:#x}, {} records ({} written)",
-                             list_begin, count, written);
+                    LOG_INFO(HW_GPU,
+                             "Indirect draw reset: list {:#x}, {} records ({} written, {} spans)",
+                             list_begin, count, written, spans.size());
                 }
             }
             submitted = true;

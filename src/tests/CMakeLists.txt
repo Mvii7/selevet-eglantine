@@ -26,6 +26,8 @@ add_executable(tests
     core/nso.cpp
     core/nrr.cpp
     core/ncz_decompressor.cpp
+    core/nup_writer.cpp
+    common/range_set.cpp
     core/internal_network/network.cpp
     video_core/memory_tracker.cpp
     video_core/memory_budget.cpp
@@ -44,6 +46,7 @@ add_executable(tests
     video_core/compute_storage_buffers.cpp
     video_core/ampere_kirby.cpp
     video_core/ampere_geometry.cpp
+    video_core/indirect_draw_reset.cpp
     video_core/ampere_geometry_lowering.cpp
     video_core/ampere_geometry_exit.cpp
     video_core/ampere_uniform_lea.cpp

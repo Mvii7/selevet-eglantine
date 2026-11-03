@@ -233,6 +233,20 @@ bool RangeSet<AddressType>::Intersects(AddressType base_address, size_t size) co
 }
 
 template <typename AddressType>
+std::optional<std::pair<AddressType, AddressType>> RangeSet<AddressType>::Containing(
+    AddressType address) const {
+    const auto& set = m_impl->m_ranges_set;
+    if (set.empty()) {
+        return std::nullopt;
+    }
+    const auto it = set.lower_bound(typename RangeSetImpl::IntervalType{address, address + 1});
+    if (it == set.end() || it->lower() > address || address >= it->upper()) {
+        return std::nullopt;
+    }
+    return std::pair{it->lower(), it->upper()};
+}
+
+template <typename AddressType>
 template <typename Func>
 void RangeSet<AddressType>::ForEach(Func&& func) const {
     m_impl->ForEach(std::move(func));
