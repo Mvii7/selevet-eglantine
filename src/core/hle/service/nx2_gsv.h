@@ -1567,16 +1567,21 @@ private:
     std::chrono::steady_clock::time_point m_next_vblank{};
 
     void PaceToVblank() {
-        if (!Settings::values.use_speed_limit.GetValue() || Settings::SpeedLimit() == 0) {
+        // "Limit speed to 30 FPS" holds presents to 30. Otherwise the cap is 60.
+        const bool cap_30 = Settings::values.limit_speed_to_30.GetValue();
+        const bool speed_limited =
+            Settings::values.use_speed_limit.GetValue() && Settings::SpeedLimit() != 0;
+        if (!speed_limited && !cap_30) {
             return;
         }
-        // EDEN_NX2_PRESENT_HZ=<rate>: hold presents to this rate instead of 60.
-        static const long long present_hz = [] {
-            const char* text = std::getenv("EDEN_NX2_PRESENT_HZ");
-            return text ? (std::max)(std::strtoll(text, nullptr, 10), 1LL) : 60LL;
-        }();
-        const auto interval =
-            std::chrono::nanoseconds{100'000'000'000LL / present_hz / Settings::SpeedLimit()};
+        const long long present_hz = cap_30 ? 30LL : 60LL;
+        static long long logged_hz = 0;
+        if (present_hz != logged_hz) {
+            logged_hz = present_hz;
+            LOG_INFO(Service, "Present rate held to {} Hz", present_hz);
+        }
+        const auto interval = std::chrono::nanoseconds{
+            100'000'000'000LL / present_hz / (speed_limited ? Settings::SpeedLimit() : 100)};
         const auto now = std::chrono::steady_clock::now();
         // EDEN_NX2_VBLANK_ALIGN=1: a late frame waits for the next vblank, as on a fixed-rate
         // console display. Off: the SDK now reports VRR (nso.cpp), and title 4 then times its own

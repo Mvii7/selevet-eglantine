@@ -85,9 +85,9 @@ cmake --build build/pgo-use --target yuzu
 
 To train your own profile, build with `tuned/pgo-gen-cache.cmake`, run with `LLVM_PROFILE_FILE` set, play for a while, then merge the output with `llvm-profdata merge -o tuned/eglantine.profdata`. A profile trained on your own games and CPU should suit you better than the one included here.
 
-## 30FPS PATCH
+## 30 FPS limit
 
-The 30FPS PATCH release limits the game to 30 fps. It uses this source with `tuned/nx2_switches-30fps.txt` as `nx2_switches.txt` beside the exe. `EDEN_NX2_PRESENT_HZ=<rate>` sets the limit; without it, the game is held to 60 as usual.
+Graphics settings has **Limit speed to 30 FPS**. It holds presents to 30 per second and applies without restarting. The old separate 30 FPS download set `EDEN_NX2_PRESENT_HZ=30` in `nx2_switches.txt`. That line is no longer read.
 
 ## Build 104 merge
 
@@ -118,3 +118,5 @@ NUP containers load, and a loose dump can be packed from the game list (`Convert
 GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.
 
 The changes in this repo were written with Claude (Anthropic), then tested in-game by the repo owner. They have not been reviewed by the Eglantine developers.
+
+The NUP loader and the 30 FPS checkbox were written with Grok 4.7.
