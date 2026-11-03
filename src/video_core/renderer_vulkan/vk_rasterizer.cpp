@@ -343,7 +343,8 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                     gpu_memory->FlushRegion(list_begin, list_bytes,
                                             VideoCommon::CacheType::BufferCache);
                 }
-                std::vector<u64> pointers(count);
+                static std::vector<u64> pointers;
+                pointers.resize(count);
                 gpu_memory->ReadBlockUnsafe(list_begin, pointers.data(), list_bytes);
                 static constexpr std::array<u32, 5> record{0, 1, 0, 0, 0};
                 // Same switch as AccelerateInlineToMemory. A GPU-modified record is uploaded now;
@@ -352,26 +353,114 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                     const char* value = std::getenv("EDEN_NX2_INLINE_DEFER");
                     return value == nullptr || value[0] != '0';
                 }();
-                std::vector<VideoCommon::IndirectResetPiece> pieces;
-                pieces.reserve(count);
-                u32 written = 0;
-                for (const u64 pointer : pointers) {
-                    if (pointer == 0 || !gpu_memory->IsFullyMappedRange(pointer, sizeof(record))) {
-                        continue;
+                // The pointer list for one chunk of the hill does not change from frame to frame.
+                // Translating every pointer is the CPU cost; the 20-byte store still happens below.
+                struct CachedList {
+                    GPUVAddr list_begin{};
+                    u32 count{};
+                    u32 stamp{};
+                    std::vector<u64> pointers;
+                    std::vector<VideoCommon::IndirectResetSpan> spans;
+                    std::vector<GPUVAddr> direct;
+                };
+                static std::array<CachedList, 8> cached_lists{};
+                static u32 cache_stamp = 0;
+                const auto mappings_hold = [&](const CachedList& entry) {
+                    for (const VideoCommon::IndirectResetSpan& span : entry.spans) {
+                        const size_t bytes = size_t{span.count} * sizeof(record);
+                        if (!gpu_memory->IsFullyMappedRange(span.gpu, bytes)) {
+                            return false;
+                        }
+                        const auto cpu = gpu_memory->GpuToCpuAddress(span.gpu);
+                        if (!cpu || *cpu != span.cpu) {
+                            return false;
+                        }
+                        if (span.count > 1) {
+                            const GPUVAddr last_gpu =
+                                span.gpu + (u64{span.count} - 1) * sizeof(record);
+                            const auto last_cpu = gpu_memory->GpuToCpuAddress(last_gpu);
+                            const DAddr expect = span.cpu + (span.count - 1) * sizeof(record);
+                            if (!last_cpu || *last_cpu != expect) {
+                                return false;
+                            }
+                        }
                     }
-                    const auto cpu = gpu_memory->GpuToCpuAddress(pointer);
-                    if (!cpu) {
-                        gpu_memory->WriteBlock(pointer, record.data(), sizeof(record));
-                        ++written;
-                        continue;
+                    for (const GPUVAddr gpu : entry.direct) {
+                        if (!gpu_memory->IsFullyMappedRange(gpu, sizeof(record)) ||
+                            gpu_memory->GpuToCpuAddress(gpu)) {
+                            return false;
+                        }
                     }
-                    pieces.push_back(VideoCommon::IndirectResetPiece{pointer, *cpu});
+                    return true;
+                };
+                // Remember a list only when its records merge. Checking a list that is one
+                // span per rock costs as much as translating it again, and must not evict a
+                // list that did merge.
+                const auto merged = [](const CachedList& candidate) {
+                    return candidate.spans.size() * 4 < candidate.count;
+                };
+                CachedList* entry = nullptr;
+                for (CachedList& candidate : cached_lists) {
+                    if (candidate.count == count && candidate.list_begin == list_begin &&
+                        merged(candidate) && candidate.pointers == pointers) {
+                        entry = &candidate;
+                        break;
+                    }
                 }
-                std::vector<VideoCommon::IndirectResetSpan> spans;
-                VideoCommon::CoalesceIndirectResetPieces(pieces, sizeof(record), spans);
-                std::vector<u8> payload;
+                bool reused = false;
+                if (entry != nullptr && mappings_hold(*entry)) {
+                    reused = true;
+                } else if (entry != nullptr) {
+                    // The GPU addresses moved. Drop the entry so the next frame does not
+                    // keep matching it and translating the list anyway.
+                    entry->count = 0;
+                    entry->pointers.clear();
+                    entry->spans.clear();
+                    entry->direct.clear();
+                    entry = nullptr;
+                }
+                std::vector<VideoCommon::IndirectResetSpan> built_spans;
+                std::vector<GPUVAddr> built_direct;
+                if (!reused) {
+                    std::vector<VideoCommon::IndirectResetPiece> pieces;
+                    pieces.reserve(count);
+                    for (const u64 pointer : pointers) {
+                        if (pointer == 0 ||
+                            !gpu_memory->IsFullyMappedRange(pointer, sizeof(record))) {
+                            continue;
+                        }
+                        const auto cpu = gpu_memory->GpuToCpuAddress(pointer);
+                        if (!cpu) {
+                            built_direct.push_back(pointer);
+                            continue;
+                        }
+                        pieces.push_back(VideoCommon::IndirectResetPiece{pointer, *cpu});
+                    }
+                    VideoCommon::CoalesceIndirectResetPieces(pieces, sizeof(record), built_spans);
+                    if (built_spans.size() * 4 < count) {
+                        entry = &*std::ranges::min_element(
+                            cached_lists, [](const CachedList& a, const CachedList& b) {
+                                return a.stamp < b.stamp;
+                            });
+                        entry->list_begin = list_begin;
+                        entry->count = count;
+                        entry->pointers = pointers;
+                        entry->spans = built_spans;
+                        entry->direct = built_direct;
+                        entry->stamp = ++cache_stamp;
+                    }
+                } else {
+                    entry->stamp = ++cache_stamp;
+                }
+                const auto& spans = reused ? entry->spans : built_spans;
+                const auto& direct = reused ? entry->direct : built_direct;
+                static std::vector<u8> payload;
                 std::vector<VideoCommon::IndirectResetSpan> cache_spans;
                 cache_spans.reserve(spans.size());
+                u32 written = static_cast<u32>(direct.size());
+                for (const GPUVAddr gpu : direct) {
+                    gpu_memory->WriteBlock(gpu, record.data(), sizeof(record));
+                }
                 {
                     // buffer_cache.mutex is already held by the lock at the start of PrepareDraw.
                     for (const VideoCommon::IndirectResetSpan& span : spans) {
@@ -411,11 +500,18 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                     }
                 }
                 static u32 reset_logs{};
+                static bool logged_reuse = false;
                 if (reset_logs < 5) {
                     ++reset_logs;
                     LOG_INFO(HW_GPU,
                              "Indirect draw reset: list {:#x}, {} records ({} written, {} spans)",
                              list_begin, count, written, spans.size());
+                }
+                if (reused && !logged_reuse) {
+                    logged_reuse = true;
+                    LOG_INFO(HW_GPU,
+                             "Indirect draw reset: unchanged list {:#x}, {} records, {} spans",
+                             list_begin, count, spans.size());
                 }
             }
             submitted = true;
