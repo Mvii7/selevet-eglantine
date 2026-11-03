@@ -85,9 +85,9 @@ cmake --build build/pgo-use --target yuzu
 
 To train your own profile, build with `tuned/pgo-gen-cache.cmake`, run with `LLVM_PROFILE_FILE` set, play for a while, then merge the output with `llvm-profdata merge -o tuned/eglantine.profdata`. A profile trained on your own games and CPU should suit you better than the one included here.
 
-## 30FPS PATCH
+## 30 FPS limit
 
-The 30FPS PATCH release limits the game to 30 fps. It uses this source with `tuned/nx2_switches-30fps.txt` as `nx2_switches.txt` beside the exe. `EDEN_NX2_PRESENT_HZ=<rate>` sets the limit; without it, the game is held to 60 as usual.
+Graphics settings has **Limit speed to 30 FPS**. It holds presents to 30 per second and applies without restarting. The old separate 30 FPS download set `EDEN_NX2_PRESENT_HZ=30` in `nx2_switches.txt`. That line is no longer read.
 
 ## Build 104 merge
 
@@ -109,8 +109,14 @@ The CPU translator no longer uses AVX-512, even on CPUs that have it (`EDEN_NX2_
 
 The loader makes the Switch 2 SDK's `nn::vi::detail::DefaultDisplay::QueryVrrSupported` report VRR support, found by its exported name (`EDEN_NX2_REPORT_VRR=0` turns it off). Switch 2 draws skip a pipeline that is still being built instead of waiting for it when asynchronous shaders are on (`EDEN_NX2_ASYNC_SKIP=0`). `EDEN_NX2_VBLANK_ALIGN=1` holds late frames to the next 60 Hz vblank. A debug readback that froze the game once is off by default.
 
+## NUP
+
+NUP containers load, and a loose dump can be packed from the game list (`Convert to NUP...`) or with `eden-cli --pack-nup <dump> [<out.nup>]`. A compressed member larger than 256 MiB is decompressed to a temporary file instead of being held in memory. A Switch 2 NUP is detected from `main.npdm` inside the container and boots with the 12 GiB layout.
+
 ## License and AI disclosure
 
 GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.
 
 The changes in this repo were written with Claude (Anthropic), then tested in-game by the repo owner. They have not been reviewed by the Eglantine developers.
+
+The NUP loader and the 30 FPS checkbox were written with Grok 4.7.

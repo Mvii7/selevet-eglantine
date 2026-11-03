@@ -1,13 +1,15 @@
 name: release-windows
 
-# Manual Windows release. This is the non-PGO MSVC build: the same shape as
+# Windows release. This is the non-PGO MSVC build: the same shape as
 # Djihads80/Eglantine's windows-x86_64 job, without the MinGW PGO build.
+# It runs on every push, and can still be started from the Run workflow menu.
 #
 # The workflow file has to live on the branch selected in the Run workflow
 # menu. To publish some other branch, run this from main and set "ref" to
 # that branch, tag, or full commit SHA. The release tag points at the commit
 # that was built.
 on:
+  push:
   workflow_dispatch:
     inputs:
       ref:
@@ -17,15 +19,13 @@ on:
       publish_release:
         description: Publish the binaries as a GitHub release
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
 
-concurrency:
-  group: release-windows-${{ inputs.ref || github.ref }}
-  cancel-in-progress: false
-
+# Actions runs workflows concurrently unless a concurrency group says
+# otherwise. Leaving that group out lets overlapping pushes build together.
 jobs:
   build:
     name: windows-x86_64
@@ -61,6 +61,25 @@ jobs:
 
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
+
+      # msvc-dev-cmd puts Visual Studio's bundled CMake first on PATH. This
+      # project requires 3.31, so install that release afterwards and check
+      # the binary that configure will actually run.
+      - name: Install CMake 3.31.12
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: "3.31.12"
+
+      - name: Check CMake
+        shell: pwsh
+        run: |
+          $cmd = Get-Command cmake | Select-Object -ExpandProperty Source
+          Write-Host "cmake: $cmd"
+          cmake --version
+          $version = (cmake --version | Select-Object -First 1)
+          if ($version -notmatch '3\.31\.12') {
+            throw "Expected CMake 3.31.12, found $version at $cmd"
+          }
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
