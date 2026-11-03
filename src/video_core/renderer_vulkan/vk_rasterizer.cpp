@@ -385,9 +385,9 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                             }
                         }
                     }
-                    for (const GPUVAddr gpu : entry.direct) {
-                        if (!gpu_memory->IsFullyMappedRange(gpu, sizeof(record)) ||
-                            gpu_memory->GpuToCpuAddress(gpu)) {
+                    for (const GPUVAddr address : entry.direct) {
+                        if (!gpu_memory->IsFullyMappedRange(address, sizeof(record)) ||
+                            gpu_memory->GpuToCpuAddress(address)) {
                             return false;
                         }
                     }
@@ -463,8 +463,8 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                 repeated.reserve(spans.size());
                 u32 written = static_cast<u32>(direct.size());
                 u32 buffer_copies = 0;
-                for (const GPUVAddr gpu : direct) {
-                    gpu_memory->WriteBlock(gpu, record.data(), sizeof(record));
+                for (const GPUVAddr address : direct) {
+                    gpu_memory->WriteBlock(address, record.data(), sizeof(record));
                 }
                 {
                     // buffer_cache.mutex is already held by the lock at the start of PrepareDraw.
