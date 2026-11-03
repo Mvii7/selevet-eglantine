@@ -269,13 +269,13 @@ private:
             const bool native = new_cpu && !Lookup(after.mappings, start);
             const bool map = new_cpu.has_value();
             const u64 cpu = new_cpu.value_or(old_cpu.value_or(0));
-            const u64 size = boundaries[i] - start;
+            const u64 span = boundaries[i] - start;
             if (!changes.empty() && changes.back().map == map && changes.back().native == native &&
                 changes.back().range.gpu + changes.back().range.size == start &&
                 changes.back().range.cpu + changes.back().range.size == cpu) {
-                changes.back().range.size += size;
+                changes.back().range.size += span;
             } else {
-                changes.push_back({{start, cpu, size}, map, native});
+                changes.push_back({{start, cpu, span}, map, native});
             }
         }
         return changes;
