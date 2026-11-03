@@ -166,6 +166,8 @@ inline std::recursive_mutex g_nx2_sparse_backing_mutex;
 inline Nx2SparseBackingHandler g_nx2_sparse_backing;
 inline std::atomic<u64> g_nx2_sparse_low{~u64{0}};
 inline std::atomic<u64> g_nx2_sparse_high{0};
+/// False when the host driver cannot use the sparse images lazy regions lead to.
+inline std::atomic<bool> g_nx2_sparse_lazy_supported{true};
 
 inline void Nx2SetSparseBacking(Nx2SparseBackingHandler handler) {
     std::scoped_lock lk{g_nx2_sparse_backing_mutex};

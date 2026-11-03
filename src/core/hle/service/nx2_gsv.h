@@ -944,13 +944,21 @@ private:
         }
     }
 
-    // EDEN_NX2_SPARSE_LAZY=0 backs sparse regions whole, as before.
+    // EDEN_NX2_SPARSE_LAZY=0 backs sparse regions whole, =1 forces lazy backing. Otherwise the
+    // renderer turns lazy backing off for drivers that crash on the sparse images it creates.
+    // The driver flag is read on each call: the renderer sets it after process start.
     static bool LazySparseRegions() {
-        static const bool lazy = [] {
+        static const int forced = [] {
             const char* value = std::getenv("EDEN_NX2_SPARSE_LAZY");
-            return value == nullptr || value[0] != '0';
+            if (value == nullptr) {
+                return -1;
+            }
+            return value[0] == '0' ? 0 : 1;
         }();
-        return lazy;
+        if (forced != -1) {
+            return forced == 1;
+        }
+        return Tegra::g_nx2_sparse_lazy_supported.load(std::memory_order_relaxed);
     }
 
     static constexpr u32 SparseRegionFlag = 0x200; ///< Word 7 of 214 (0x60c arrays, 0xa0c pools)
