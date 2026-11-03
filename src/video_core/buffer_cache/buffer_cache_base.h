@@ -48,6 +48,13 @@ namespace VideoCommon {
 
 using BufferId = Common::SlotId;
 
+// One contiguous run of identical bytes. Hilltop reset records share a host buffer without
+// sitting next to each other, so each run is its own region in one copy.
+struct RepeatedInline {
+    DAddr address;
+    u32 size;
+};
+
 using VideoCore::Surface::PixelFormat;
 using namespace Common::Literals;
 
@@ -261,6 +268,12 @@ public:
     }
 
     bool InlineMemory(DAddr dest_address, size_t copy_size, std::span<const u8> inlined_buffer);
+
+    /// Repeats `pattern` across each range. Registered GPU-modified ranges that share a host
+    /// buffer go out in one copy. `uploaded` is 1 for a range that was copied. Returns how many
+    /// host copies were recorded.
+    u32 InlineRepeated(std::span<const RepeatedInline> ranges, std::span<const u8> pattern,
+                       std::vector<u8>& uploaded);
 
     void BindGraphicsUniformBuffer(size_t stage, u32 index, GPUVAddr gpu_addr, u32 size);
 

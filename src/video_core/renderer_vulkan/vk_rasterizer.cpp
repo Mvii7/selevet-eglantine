@@ -455,14 +455,21 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                 const auto& spans = reused ? entry->spans : built_spans;
                 const auto& direct = reused ? entry->direct : built_direct;
                 static std::vector<u8> payload;
+                static std::vector<VideoCommon::RepeatedInline> repeated;
+                static std::vector<u8> uploaded;
                 std::vector<VideoCommon::IndirectResetSpan> cache_spans;
                 cache_spans.reserve(spans.size());
+                repeated.clear();
+                repeated.reserve(spans.size());
                 u32 written = static_cast<u32>(direct.size());
+                u32 buffer_copies = 0;
                 for (const GPUVAddr gpu : direct) {
                     gpu_memory->WriteBlock(gpu, record.data(), sizeof(record));
                 }
                 {
                     // buffer_cache.mutex is already held by the lock at the start of PrepareDraw.
+                    // Guest memory is written per span. The host copy is one submission for every
+                    // span that shares a buffer, which is what keeps a long scattered list cheap.
                     for (const VideoCommon::IndirectResetSpan& span : spans) {
                         const size_t bytes = size_t{span.count} * sizeof(record);
                         payload.resize(bytes);
@@ -476,16 +483,26 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                             std::memcpy(payload.data() + filled, payload.data(), bytes - filled);
                         }
                         gpu_memory->WriteBlockUnsafe(span.gpu, payload.data(), bytes);
-                        const bool uploaded = buffer_cache.InlineMemory(span.cpu, bytes, payload);
-                        if (!uploaded && !defer_inline) {
+                        repeated.push_back(VideoCommon::RepeatedInline{
+                            span.cpu, static_cast<u32>(bytes)});
+                        written += span.count;
+                    }
+                    buffer_copies = buffer_cache.InlineRepeated(
+                        repeated,
+                        std::span<const u8>{reinterpret_cast<const u8*>(record.data()), sizeof(record)},
+                        uploaded);
+                    for (size_t index = 0; index < spans.size(); ++index) {
+                        const VideoCommon::IndirectResetSpan& span = spans[index];
+                        const size_t bytes = size_t{span.count} * sizeof(record);
+                        const bool did_upload = index < uploaded.size() && uploaded[index] != 0;
+                        if (!did_upload && !defer_inline) {
                             buffer_cache.WriteMemory(span.cpu, bytes);
                         }
-                        if (uploaded || !defer_inline) {
+                        if (did_upload || !defer_inline) {
                             cache_spans.push_back(span);
                         } else {
                             gpu_memory->AccumulateInvalidation(span.gpu, bytes);
                         }
-                        written += span.count;
                     }
                 }
                 for (const VideoCommon::IndirectResetSpan& span : spans) {
@@ -504,8 +521,8 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                 if (reset_logs < 5) {
                     ++reset_logs;
                     LOG_INFO(HW_GPU,
-                             "Indirect draw reset: list {:#x}, {} records ({} written, {} spans)",
-                             list_begin, count, written, spans.size());
+                             "Indirect draw reset: list {:#x}, {} records ({} written, {} spans, {} buffer copies)",
+                             list_begin, count, written, spans.size(), buffer_copies);
                 }
                 if (reused && !logged_reuse) {
                     logged_reuse = true;

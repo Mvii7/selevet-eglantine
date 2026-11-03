@@ -2039,6 +2039,115 @@ void BufferCache<P>::InlineMemoryImplementation(DAddr dest_address, size_t copy_
 }
 
 template <class P>
+u32 BufferCache<P>::InlineRepeated(std::span<const RepeatedInline> ranges,
+                                   std::span<const u8> pattern, std::vector<u8>& uploaded) {
+    uploaded.assign(ranges.size(), 0);
+    if (ranges.empty() || pattern.empty()) {
+        return 0;
+    }
+    struct Item {
+        u32 index;
+        DAddr address;
+        u32 size;
+        BufferId buffer_id;
+    };
+    std::vector<Item> items;
+    items.reserve(ranges.size());
+    for (u32 index = 0; index < static_cast<u32>(ranges.size()); ++index) {
+        const RepeatedInline& range = ranges[index];
+        if (range.size == 0 || range.address == 0 || range.size % pattern.size() != 0) {
+            continue;
+        }
+        if (!IsRegionRegistered(range.address, range.size)) {
+            continue;
+        }
+        const DAddr aligned_start = Common::AlignDown(range.address, DEVICE_PAGESIZE);
+        const DAddr aligned_end = Common::AlignUp(range.address + range.size, DEVICE_PAGESIZE);
+        if (!IsRegionGpuModified(aligned_start, aligned_end - aligned_start)) {
+            continue;
+        }
+        ClearDownload(range.address, range.size);
+        gpu_modified_ranges.Subtract(range.address, range.size);
+        const BufferId buffer_id = FindBuffer(range.address, range.size, false);
+        if (buffer_id == NULL_BUFFER_ID) {
+            continue;
+        }
+        items.push_back(Item{index, range.address, range.size, buffer_id});
+        uploaded[index] = 1;
+    }
+    if (items.empty()) {
+        return 0;
+    }
+    std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
+        return a.buffer_id < b.buffer_id || (a.buffer_id == b.buffer_id && a.address < b.address);
+    });
+
+    const auto fill_pattern = [&](u8* dest, size_t bytes) {
+        std::memcpy(dest, pattern.data(), pattern.size());
+        size_t filled = pattern.size();
+        while (filled * 2 <= bytes) {
+            std::memcpy(dest + filled, dest, filled);
+            filled *= 2;
+        }
+        if (filled < bytes) {
+            std::memcpy(dest + filled, dest, bytes - filled);
+        }
+    };
+
+    u32 copies = 0;
+    for (size_t begin = 0; begin < items.size();) {
+        size_t end = begin + 1;
+        while (end < items.size() && items[end].buffer_id == items[begin].buffer_id) {
+            ++end;
+        }
+        Buffer& buffer = slot_buffers[items[begin].buffer_id];
+        for (size_t index = begin; index < end; ++index) {
+            SynchronizeBuffer(buffer, items[index].address, items[index].size);
+        }
+        if constexpr (USE_MEMORY_MAPS_FOR_UPLOADS) {
+            // A few thousand regions fit in one transfer. More than that is split so the
+            // recorded copy stays bounded; each piece is still one submission for the group.
+            constexpr size_t RegionCap = 4096;
+            for (size_t chunk = begin; chunk < end; chunk += RegionCap) {
+                const size_t chunk_end = (std::min)(end, chunk + RegionCap);
+                u64 total = 0;
+                for (size_t index = chunk; index < chunk_end; ++index) {
+                    total += items[index].size;
+                }
+                auto upload_staging = runtime.UploadStagingBuffer(static_cast<size_t>(total));
+                std::vector<BufferCopy> regions;
+                regions.reserve(chunk_end - chunk);
+                size_t src = 0;
+                for (size_t index = chunk; index < chunk_end; ++index) {
+                    const Item& item = items[index];
+                    fill_pattern(upload_staging.mapped_span.data() + src, item.size);
+                    regions.push_back(BufferCopy{
+                        .src_offset = upload_staging.offset + src,
+                        .dst_offset = buffer.Offset(item.address),
+                        .size = item.size,
+                    });
+                    src += item.size;
+                }
+                const bool can_reorder = runtime.CanReorderUpload(buffer, regions);
+                runtime.CopyBuffer(buffer, upload_staging.buffer, regions, true, can_reorder);
+                ++copies;
+            }
+        } else {
+            std::vector<u8> bytes;
+            for (size_t index = begin; index < end; ++index) {
+                const Item& item = items[index];
+                bytes.resize(item.size);
+                fill_pattern(bytes.data(), item.size);
+                buffer.ImmediateUpload(buffer.Offset(item.address), bytes);
+                ++copies;
+            }
+        }
+        begin = end;
+    }
+    return copies;
+}
+
+template <class P>
 void BufferCache<P>::DownloadBufferMemory(Buffer& buffer) {
     DownloadBufferMemory(buffer, buffer.CpuAddr(), buffer.SizeBytes());
 }
