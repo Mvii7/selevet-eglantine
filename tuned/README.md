@@ -109,6 +109,10 @@ The CPU translator no longer uses AVX-512, even on CPUs that have it (`EDEN_NX2_
 
 The loader makes the Switch 2 SDK's `nn::vi::detail::DefaultDisplay::QueryVrrSupported` report VRR support, found by its exported name (`EDEN_NX2_REPORT_VRR=0` turns it off). Switch 2 draws skip a pipeline that is still being built instead of waiting for it when asynchronous shaders are on (`EDEN_NX2_ASYNC_SKIP=0`). `EDEN_NX2_VBLANK_ALIGN=1` holds late frames to the next 60 Hz vblank. A debug readback that froze the game once is off by default.
 
+## NUP
+
+NUP containers load, and a loose dump can be packed from the game list (`Convert to NUP...`) or with `eden-cli --pack-nup <dump> [<out.nup>]`. A compressed member larger than 256 MiB is decompressed to a temporary file instead of being held in memory. A Switch 2 NUP is detected from `main.npdm` inside the container and boots with the 12 GiB layout.
+
 ## License and AI disclosure
 
 GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.

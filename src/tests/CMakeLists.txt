@@ -26,6 +26,7 @@ add_executable(tests
     core/nso.cpp
     core/nrr.cpp
     core/ncz_decompressor.cpp
+    core/nup_writer.cpp
     core/internal_network/network.cpp
     video_core/memory_tracker.cpp
     video_core/memory_budget.cpp
