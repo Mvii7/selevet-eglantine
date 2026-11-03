@@ -358,7 +358,6 @@ struct Values {
                                                   true};
 
     // Holds each presented frame to 30 Hz. Read every present, so it applies without a restart.
-    // EDEN_NX2_PRESENT_HZ in nx2_switches.txt overrides it.
     SwitchableSetting<bool> limit_speed_to_30{linkage, false, "limit_speed_to_30",
                                               Category::Renderer};
 

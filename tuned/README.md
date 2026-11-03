@@ -87,7 +87,7 @@ To train your own profile, build with `tuned/pgo-gen-cache.cmake`, run with `LLV
 
 ## 30 FPS limit
 
-Graphics settings has **Limit speed to 30 FPS**. It holds presents to 30 per second and applies without restarting. `EDEN_NX2_PRESENT_HZ=<rate>` in `nx2_switches.txt` overrides the checkbox, which is how the old separate 30 FPS download worked: it was this same program with that line set to 30.
+Graphics settings has **Limit speed to 30 FPS**. It holds presents to 30 per second and applies without restarting. The old separate 30 FPS download set `EDEN_NX2_PRESENT_HZ=30` in `nx2_switches.txt`. That line is no longer read.
 
 ## Build 104 merge
 

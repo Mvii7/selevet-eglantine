@@ -1567,23 +1567,14 @@ private:
     std::chrono::steady_clock::time_point m_next_vblank{};
 
     void PaceToVblank() {
-        // EDEN_NX2_PRESENT_HZ=<rate> overrides the graphics setting. Otherwise the
-        // "Limit speed to 30 FPS" checkbox holds presents to 30, and the default is 60.
-        static const long long present_hz_override = [] {
-            const char* text = std::getenv("EDEN_NX2_PRESENT_HZ");
-            if (text == nullptr || text[0] == '\0') {
-                return 0LL;
-            }
-            return (std::max)(std::strtoll(text, nullptr, 10), 1LL);
-        }();
+        // "Limit speed to 30 FPS" holds presents to 30. Otherwise the cap is 60.
         const bool cap_30 = Settings::values.limit_speed_to_30.GetValue();
         const bool speed_limited =
             Settings::values.use_speed_limit.GetValue() && Settings::SpeedLimit() != 0;
-        if (!speed_limited && present_hz_override == 0 && !cap_30) {
+        if (!speed_limited && !cap_30) {
             return;
         }
-        const long long present_hz =
-            present_hz_override != 0 ? present_hz_override : (cap_30 ? 30LL : 60LL);
+        const long long present_hz = cap_30 ? 30LL : 60LL;
         static long long logged_hz = 0;
         if (present_hz != logged_hz) {
             logged_hz = present_hz;
