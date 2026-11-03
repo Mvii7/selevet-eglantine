@@ -1,0 +1,231 @@
+name: release-windows
+
+# Manual Windows release. This is the non-PGO MSVC build: the same shape as
+# Djihads80/Eglantine's windows-x86_64 job, without the MinGW PGO build.
+#
+# The workflow file has to live on the branch selected in the Run workflow
+# menu. To publish some other branch, run this from main and set "ref" to
+# that branch, tag, or full commit SHA. The release tag points at the commit
+# that was built.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or full commit SHA to build. Leave empty to build the branch selected above.
+        type: string
+        default: ""
+      publish_release:
+        description: Publish the binaries as a GitHub release
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-windows-${{ inputs.ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: windows-x86_64
+    runs-on: windows-2022
+    timeout-minutes: 360
+    outputs:
+      sha: ${{ steps.meta.outputs.sha }}
+      ref_name: ${{ steps.meta.outputs.ref_name }}
+    env:
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: 3G
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+
+      - name: Record built revision
+        id: meta
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          name=$(git rev-parse --abbrev-ref HEAD)
+          if [ "$name" = "HEAD" ]; then
+            name="$REQUESTED_REF"
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "ref_name=$name" >> "$GITHUB_OUTPUT"
+          echo "Building $name at $sha"
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qtcharts
+          cache: true
+
+      - name: Install sccache
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'sccache.zip'
+          Invoke-WebRequest -OutFile $zip https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc.zip
+          Expand-Archive $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'sccache')
+          $bin = (Get-ChildItem -Recurse -Filter sccache.exe (Join-Path $env:RUNNER_TEMP 'sccache')).DirectoryName
+          $bin | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: ./tools/windows/install-vulkan-sdk.ps1
+
+      - name: Verify Vulkan tools
+        shell: pwsh
+        run: glslangValidator --version
+
+      - name: Restore CPM downloads
+        id: cpm-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .cache/cpm
+          key: cpm-windows-x86_64-${{ hashFiles('cpmfile.json', 'CMakeLists.txt', 'src/**/CMakeLists.txt') }}
+          restore-keys: |
+            cpm-windows-x86_64-
+
+      - name: Restore compiler objects
+        id: compiler-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .sccache
+          key: sccache-windows-x86_64-${{ steps.meta.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            sccache-windows-x86_64-${{ steps.meta.outputs.sha }}-
+            sccache-windows-x86_64-
+
+      - name: Configure
+        shell: bash
+        run: >-
+          cmake -S . -B build/release -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=OFF
+          -DYUZU_TESTS=OFF
+          -DYUZU_CMD=ON
+          -DYUZU_ROOM=OFF
+          -DYUZU_ROOM_STANDALONE=OFF
+          -DYUZU_USE_BUNDLED_QT=OFF
+          -DYUZU_USE_BUNDLED_SDL3=ON
+          -DENABLE_UPDATE_CHECKER=OFF
+          -DUSE_DISCORD_PRESENCE=OFF
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Save CPM downloads
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: .cache/cpm
+          key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --zero-stats || true
+          cmake --build build/release --target yuzu yuzu-cmd --parallel
+          sccache --show-stats || true
+
+      - name: Stop sccache
+        if: always() && steps.compiler-cache.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: sccache --stop-server
+
+      - name: Save compiler objects
+        if: always() && steps.compiler-cache.outcome == 'success'
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: .sccache
+          key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
+
+      - name: Package
+        shell: pwsh
+        run: |
+          foreach ($exe in 'eglantine.exe', 'eden-cli.exe') {
+            if (-not (Test-Path "build/release/bin/$exe")) {
+              throw "build/release/bin/$exe was not produced"
+            }
+          }
+          if (Test-Path 'tuned/nx2_switches.txt') {
+            Copy-Item 'tuned/nx2_switches.txt' 'build/release/bin/nx2_switches.txt'
+          }
+          windeployqt --release --no-translations build/release/bin/eglantine.exe
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: eglantine-windows-x86_64-${{ steps.meta.outputs.sha }}
+          path: build/release/bin/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish release
+    needs: build
+    if: inputs.publish_release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download binary
+        uses: actions/download-artifact@v7
+        with:
+          pattern: eglantine-windows-x86_64-${{ needs.build.outputs.sha }}
+          path: artifacts
+
+      - name: Create release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILT_SHA: ${{ needs.build.outputs.sha }}
+          BUILT_REF: ${{ needs.build.outputs.ref_name }}
+        run: |
+          set -euo pipefail
+          artifact=$(echo artifacts/*/)
+          if [ -f "$artifact/eglantine.exe" ]; then
+            source_dir="$artifact"
+          elif [ -f "$artifact/bin/eglantine.exe" ]; then
+            source_dir="$artifact/bin"
+          else
+            echo "eglantine.exe was not in the artifact"
+            find artifacts -maxdepth 3 -type f | head -50
+            exit 1
+          fi
+          mkdir dist
+          (cd "$source_dir" && zip -qr "${GITHUB_WORKSPACE}/dist/eglantine-windows-x86_64.zip" .)
+          unzip -l dist/eglantine-windows-x86_64.zip | head -40
+
+          tag="build-${GITHUB_RUN_NUMBER}"
+          cat > notes.md <<EOF
+          Windows MSVC build of \`${BUILT_REF}\` at ${BUILT_SHA}.
+
+          This is the non-PGO build. Extract the zip and run \`eglantine.exe\`. \`eden-cli.exe\` is the command-line program.
+
+          The latest [Microsoft Visual C++ x64 runtime](https://aka.ms/vs/17/release/vc_redist.x64.exe) is required. Keys and firmware are not included.
+
+          If \`nx2_switches.txt\` is in the zip, it is read from the same folder at startup.
+          EOF
+
+          gh release create "$tag" dist/eglantine-windows-x86_64.zip \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "$BUILT_SHA" \
+            --prerelease \
+            --title "Selevet Eglantine ${BUILT_REF} Windows build ${GITHUB_RUN_NUMBER} (${BUILT_SHA::7})" \
+            --notes-file notes.md
