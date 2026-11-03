@@ -373,7 +373,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                 std::vector<VideoCommon::IndirectResetSpan> cache_spans;
                 cache_spans.reserve(spans.size());
                 {
-                    std::scoped_lock lock{buffer_cache.mutex};
+                    // buffer_cache.mutex is already held by the lock at the start of PrepareDraw.
                     for (const VideoCommon::IndirectResetSpan& span : spans) {
                         const size_t bytes = size_t{span.count} * sizeof(record);
                         payload.resize(bytes);
@@ -403,7 +403,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                     query_cache.InvalidateRegion(span.cpu, size_t{span.count} * sizeof(record));
                 }
                 if (!cache_spans.empty()) {
-                    std::scoped_lock lock{texture_cache.mutex};
+                    // texture_cache.mutex is already held by the same PrepareDraw lock.
                     for (const VideoCommon::IndirectResetSpan& span : cache_spans) {
                         const size_t bytes = size_t{span.count} * sizeof(record);
                         texture_cache.WriteMemory(span.cpu, bytes);
