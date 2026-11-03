@@ -365,22 +365,39 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                 };
                 static std::array<CachedList, 8> cached_lists{};
                 static u32 cache_stamp = 0;
+                const auto span_holds = [&](const VideoCommon::IndirectResetSpan& span) {
+                    const size_t bytes = size_t{span.count} * sizeof(record);
+                    if (!gpu_memory->IsFullyMappedRange(span.gpu, bytes)) {
+                        return false;
+                    }
+                    const auto cpu = gpu_memory->GpuToCpuAddress(span.gpu);
+                    if (!cpu || *cpu != span.cpu) {
+                        return false;
+                    }
+                    if (span.count > 1) {
+                        const GPUVAddr last_gpu =
+                            span.gpu + (u64{span.count} - 1) * sizeof(record);
+                        const auto last_cpu = gpu_memory->GpuToCpuAddress(last_gpu);
+                        const DAddr expect = span.cpu + (span.count - 1) * sizeof(record);
+                        if (!last_cpu || *last_cpu != expect) {
+                            return false;
+                        }
+                    }
+                    return true;
+                };
+                // A hilltop list is one span per rock, thousands of them, and the same list
+                // repeats. Checking every rock costs as much as translating it, so a reuse
+                // confirms the ends and a stride of the list.
                 const auto mappings_hold = [&](const CachedList& entry) {
-                    for (const VideoCommon::IndirectResetSpan& span : entry.spans) {
-                        const size_t bytes = size_t{span.count} * sizeof(record);
-                        if (!gpu_memory->IsFullyMappedRange(span.gpu, bytes)) {
+                    if (!entry.spans.empty()) {
+                        if (!span_holds(entry.spans.front())) {
                             return false;
                         }
-                        const auto cpu = gpu_memory->GpuToCpuAddress(span.gpu);
-                        if (!cpu || *cpu != span.cpu) {
+                        if (entry.spans.size() > 1 && !span_holds(entry.spans.back())) {
                             return false;
                         }
-                        if (span.count > 1) {
-                            const GPUVAddr last_gpu =
-                                span.gpu + (u64{span.count} - 1) * sizeof(record);
-                            const auto last_cpu = gpu_memory->GpuToCpuAddress(last_gpu);
-                            const DAddr expect = span.cpu + (span.count - 1) * sizeof(record);
-                            if (!last_cpu || *last_cpu != expect) {
+                        for (size_t index = 64; index + 1 < entry.spans.size(); index += 64) {
+                            if (!span_holds(entry.spans[index])) {
                                 return false;
                             }
                         }
@@ -393,16 +410,10 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                     }
                     return true;
                 };
-                // Remember a list only when its records merge. Checking a list that is one
-                // span per rock costs as much as translating it again, and must not evict a
-                // list that did merge.
-                const auto merged = [](const CachedList& candidate) {
-                    return candidate.spans.size() * 4 < candidate.count;
-                };
                 CachedList* entry = nullptr;
                 for (CachedList& candidate : cached_lists) {
                     if (candidate.count == count && candidate.list_begin == list_begin &&
-                        merged(candidate) && candidate.pointers == pointers) {
+                        candidate.pointers == pointers) {
                         entry = &candidate;
                         break;
                     }
@@ -437,7 +448,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                         pieces.push_back(VideoCommon::IndirectResetPiece{pointer, *cpu});
                     }
                     VideoCommon::CoalesceIndirectResetPieces(pieces, sizeof(record), built_spans);
-                    if (built_spans.size() * 4 < count) {
+                    if (!built_spans.empty() || !built_direct.empty()) {
                         entry = &*std::ranges::min_element(
                             cached_lists, [](const CachedList& a, const CachedList& b) {
                                 return a.stamp < b.stamp;
@@ -457,10 +468,11 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                 static std::vector<u8> payload;
                 static std::vector<VideoCommon::RepeatedInline> repeated;
                 static std::vector<u8> uploaded;
+                static std::vector<VideoCommon::IndirectResetSpan> registered;
                 std::vector<VideoCommon::IndirectResetSpan> cache_spans;
                 cache_spans.reserve(spans.size());
                 repeated.clear();
-                repeated.reserve(spans.size());
+                registered.clear();
                 u32 written = static_cast<u32>(direct.size());
                 u32 buffer_copies = 0;
                 for (const GPUVAddr address : direct) {
@@ -468,8 +480,9 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                 }
                 {
                     // buffer_cache.mutex is already held by the lock at the start of PrepareDraw.
-                    // Guest memory is written per span. The host copy is one submission for every
-                    // span that shares a buffer, which is what keeps a long scattered list cheap.
+                    // Guest memory gets every record. A record with no host buffer is not
+                    // invalidated: the next upload reads the guest bytes, and invalidating
+                    // thousands of absent ranges is the hilltop hitch.
                     for (const VideoCommon::IndirectResetSpan& span : spans) {
                         const size_t bytes = size_t{span.count} * sizeof(record);
                         payload.resize(bytes);
@@ -482,17 +495,21 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                         if (filled < bytes) {
                             std::memcpy(payload.data() + filled, payload.data(), bytes - filled);
                         }
-                        gpu_memory->WriteBlockUnsafe(span.gpu, payload.data(), bytes);
+                        device_memory.WriteBlockUnsafe(span.cpu, payload.data(), bytes);
+                        written += span.count;
+                        if (!buffer_cache.IsRegionRegistered(span.cpu, bytes)) {
+                            continue;
+                        }
+                        registered.push_back(span);
                         repeated.push_back(VideoCommon::RepeatedInline{
                             span.cpu, static_cast<u32>(bytes)});
-                        written += span.count;
                     }
                     buffer_copies = buffer_cache.InlineRepeated(
                         repeated,
                         std::span<const u8>{reinterpret_cast<const u8*>(record.data()), sizeof(record)},
                         uploaded);
-                    for (size_t index = 0; index < spans.size(); ++index) {
-                        const VideoCommon::IndirectResetSpan& span = spans[index];
+                    for (size_t index = 0; index < registered.size(); ++index) {
+                        const VideoCommon::IndirectResetSpan& span = registered[index];
                         const size_t bytes = size_t{span.count} * sizeof(record);
                         const bool did_upload = index < uploaded.size() && uploaded[index] != 0;
                         if (!did_upload && !defer_inline) {
@@ -503,10 +520,8 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
                         } else {
                             gpu_memory->AccumulateInvalidation(span.gpu, bytes);
                         }
+                        query_cache.InvalidateRegion(span.cpu, bytes);
                     }
-                }
-                for (const VideoCommon::IndirectResetSpan& span : spans) {
-                    query_cache.InvalidateRegion(span.cpu, size_t{span.count} * sizeof(record));
                 }
                 if (!cache_spans.empty()) {
                     // texture_cache.mutex is already held by the same PrepareDraw lock.
