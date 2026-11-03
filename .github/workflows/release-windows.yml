@@ -24,10 +24,8 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: release-windows-${{ inputs.ref || github.ref }}
-  cancel-in-progress: false
-
+# Actions runs workflows concurrently unless a concurrency group says
+# otherwise. Leaving that group out lets overlapping pushes build together.
 jobs:
   build:
     name: windows-x86_64
