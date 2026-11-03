@@ -62,7 +62,7 @@ For information on provided development tooling, see the [Tools directory](./too
 
 ## Download
 
-You can download the latest releases from [here](https://github.com/Djihads80/Eglantine/releases).
+You can download the latest releases from [here](https://github.com/Mvii7/selevet-eglantine/releases).
 
 ## Support
 
