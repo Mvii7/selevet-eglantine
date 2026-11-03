@@ -62,6 +62,25 @@ jobs:
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
+      # msvc-dev-cmd puts Visual Studio's bundled CMake first on PATH. This
+      # project requires 3.31, so install that release afterwards and check
+      # the binary that configure will actually run.
+      - name: Install CMake 3.31.12
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: "3.31.12"
+
+      - name: Check CMake
+        shell: pwsh
+        run: |
+          $cmd = Get-Command cmake | Select-Object -ExpandProperty Source
+          Write-Host "cmake: $cmd"
+          cmake --version
+          $version = (cmake --version | Select-Object -First 1)
+          if ($version -notmatch '3\.31\.12') {
+            throw "Expected CMake 3.31.12, found $version at $cmd"
+          }
+
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
