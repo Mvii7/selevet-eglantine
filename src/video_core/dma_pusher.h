@@ -8,9 +8,10 @@
 
 #include <array>
 #include <condition_variable>
+#include <list>
 #include <optional>
-#include <set>
 #include <span>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 #include <boost/container/small_vector.hpp>
@@ -201,6 +202,9 @@ public:
     void FlushGpuWrittenCommands(GPUVAddr address, size_t size);
 
 private:
+    /// Most recently flushed first. A full list drops the entry that has gone the longest without
+    /// a flush, so a new area replaces the previous one instead of waiting once per new rock.
+    void RememberFlushedCommandEntry(GPUVAddr address, size_t size);
 
 public:
     Common::ScratchBuffer<CommandHeader> command_headers; ///< Buffer for list of commands fetched at once
@@ -259,7 +263,23 @@ public:
     VideoCore::RasterizerInterface* rasterizer = nullptr;
 
     /// GPU-written command entries that needed a flush (FlushGpuWrittenCommands batches them).
-    std::set<std::pair<GPUVAddr, size_t>> flushed_command_entries;
+    /// The hilltop colour pass is one entry per rock, and the first areas fill a small cap before
+    /// that pass is reached. 16384 covers the two ~3800-record lists in one view.
+    struct FlushedCommandEntry {
+        GPUVAddr address;
+        size_t size;
+        bool operator==(const FlushedCommandEntry&) const = default;
+    };
+    struct FlushedCommandEntryHash {
+        size_t operator()(const FlushedCommandEntry& entry) const noexcept {
+            return static_cast<size_t>(entry.address ^ (entry.address >> 32)) ^ (entry.size << 1);
+        }
+    };
+    static constexpr size_t MaxFlushedCommandEntries = 16384;
+    std::list<FlushedCommandEntry> flushed_command_entries;
+    std::unordered_map<FlushedCommandEntry, std::list<FlushedCommandEntry>::iterator,
+                       FlushedCommandEntryHash>
+        flushed_command_entry_index;
 
     const bool ib_enable : 1 = true; ///< IB mode enabled
     bool dma_increment_once : 1 = false;

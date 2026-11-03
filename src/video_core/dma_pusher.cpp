@@ -908,6 +908,23 @@ void CommandStats(int kind, std::chrono::steady_clock::duration time = {}, GPUVA
 }
 } // Anonymous namespace
 
+void DmaPusher::RememberFlushedCommandEntry(GPUVAddr address, size_t size) {
+    const FlushedCommandEntry entry{address, size};
+    if (const auto found = flushed_command_entry_index.find(entry);
+        found != flushed_command_entry_index.end()) {
+        flushed_command_entries.splice(flushed_command_entries.begin(), flushed_command_entries,
+                                       found->second);
+        return;
+    }
+    if (flushed_command_entries.size() >= MaxFlushedCommandEntries) {
+        flushed_command_entry_index.erase(flushed_command_entries.back());
+        flushed_command_entries.pop_back();
+    }
+    flushed_command_entries.push_front(entry);
+    flushed_command_entry_index.emplace(flushed_command_entries.front(),
+                                        flushed_command_entries.begin());
+}
+
 void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
     // Title 1 runs small command lists its culling dispatches fill in each frame. Accurate GPU
     // mode reads every command list through the caches (safe reads); here only the ones on pages
@@ -1011,24 +1028,29 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
         return;
     }
     Nx2MarkHotCommandEntry(address);
-    if (flushed_command_entries.size() < 1024) {
-        flushed_command_entries.emplace(address, size);
-    }
+    RememberFlushedCommandEntry(address, size);
     rasterizer->BeginFlushBatch();
     memory_manager.FlushRegion(address, size, VideoCommon::CacheType::BufferCache);
     size_t extra = 0;
-    for (const auto& [other_address, other_size] : flushed_command_entries) {
-        if (other_address != address &&
-            memory_manager.IsMemoryDirty(other_address, other_size, VideoCommon::CacheType::BufferCache)) {
-            memory_manager.FlushRegion(other_address, other_size, VideoCommon::CacheType::BufferCache);
-            ++extra;
+    for (auto it = flushed_command_entries.begin(); it != flushed_command_entries.end();) {
+        const auto current = it++;
+        if (current->address == address && current->size == size) {
+            continue;
         }
+        if (!memory_manager.IsMemoryDirty(current->address, current->size,
+                                          VideoCommon::CacheType::BufferCache)) {
+            continue;
+        }
+        memory_manager.FlushRegion(current->address, current->size,
+                                   VideoCommon::CacheType::BufferCache);
+        flushed_command_entries.splice(flushed_command_entries.begin(), flushed_command_entries,
+                                       current);
+        ++extra;
     }
-    // Donkey Kong Bananza's hilltop colour pass is one small entry per rock, and the remembered
-    // set above keeps 1024 of them. The rest of that run waited on the GPU one rock at a time,
-    // so looking at the dense center fell off as more rocks streamed in. Take the rest of this
-    // submission's short entries in this same wait. A longer entry ends the run: it may dispatch
-    // the writes the entries after it read. EDEN_NX2_CMD_LOOKAHEAD=0 leaves them to the set.
+    // The colour pass is one small entry per rock, usually its own submission, so the list above
+    // is what joins them. Also take the rest of this submission. A longer entry ends that run: it
+    // may dispatch the writes the entries after it read. An entry the GPU did not write is skipped.
+    // EDEN_NX2_CMD_LOOKAHEAD=0 leaves this submission to the remembered list.
     static const bool lookahead = [] {
         const char* value = std::getenv("EDEN_NX2_CMD_LOOKAHEAD");
         return value == nullptr || value[0] != '0';
@@ -1049,13 +1071,14 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
             if (!Nx2HasGpuWrittenPage(other_address, other_size, [&](GPUVAddr page) {
                     return memory_manager.GpuToCpuAddress(page);
                 })) {
-                break;
+                continue;
             }
             if (!memory_manager.IsMemoryDirty(other_address, other_size,
                                              VideoCommon::CacheType::BufferCache)) {
                 continue;
             }
             memory_manager.FlushRegion(other_address, other_size, VideoCommon::CacheType::BufferCache);
+            RememberFlushedCommandEntry(other_address, other_size);
             ++joined;
         }
         extra += joined;
@@ -1065,6 +1088,12 @@ void DmaPusher::FlushGpuWrittenCommands(GPUVAddr address, size_t size) {
             LOG_INFO(HW_GPU, "Command entries: {} more from this submission joined one GPU wait",
                      joined);
         }
+    }
+    static bool logged_batch = false;
+    if (!logged_batch && extra >= 64) {
+        logged_batch = true;
+        LOG_INFO(HW_GPU, "Command entries: {} remembered entries joined one GPU wait ({} remembered)",
+                 extra, flushed_command_entries.size());
     }
     rasterizer->EndFlushBatch();
     CommandStats(2, std::chrono::steady_clock::now() - flush_start, address, size);
