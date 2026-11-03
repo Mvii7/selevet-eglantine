@@ -57,13 +57,13 @@ constexpr u32 PageAlignSize(u32 size) {
 // 60 Hz display and its speed swings with the frame rate; told VRR works, it enables it and times
 // its frames itself. Make the exported function store true and succeed (any SDK version: found by
 // name). EDEN_NX2_REPORT_VRR=0 leaves it alone.
-void ReportVrrSupported(std::span<u8> image, std::string_view module_name) {
+bool ReportVrrSupported(std::span<u8> image, std::string_view module_name) {
     static const bool enabled = [] {
         const char* value = std::getenv("EDEN_NX2_REPORT_VRR");
         return value == nullptr || value[0] != '0';
     }();
     if (!enabled || image.size() < 8) {
-        return;
+        return false;
     }
     const auto read32 = [&](u64 offset) -> std::optional<u32> {
         if (offset + 4 > image.size()) return std::nullopt;
@@ -79,11 +79,11 @@ void ReportVrrSupported(std::span<u8> image, std::string_view module_name) {
     };
     const auto mod0 = read32(4);
     if (!mod0 || read32(*mod0) != Common::MakeMagic('M', 'O', 'D', '0')) {
-        return;
+        return false;
     }
     const auto dynamic_rel = read32(*mod0 + 4);
     if (!dynamic_rel) {
-        return;
+        return false;
     }
     u64 symtab = 0, strtab = 0, strsz = 0, hash = 0;
     for (u64 entry = *mod0 + static_cast<s32>(*dynamic_rel);; entry += 16) {
@@ -98,7 +98,7 @@ void ReportVrrSupported(std::span<u8> image, std::string_view module_name) {
         }
     }
     if (symtab == 0 || strtab == 0) {
-        return;
+        return false;
     }
     // DT_HASH gives the symbol count; with only DT_GNU_HASH (the Switch 2 SDK) the table runs up
     // to the string table, which follows it.
@@ -107,7 +107,7 @@ void ReportVrrSupported(std::span<u8> image, std::string_view module_name) {
         count = static_cast<u32>((strtab - symtab) / 24);
     }
     if (!count) {
-        return;
+        return false;
     }
     constexpr std::string_view Target = "_ZNK2nn2vi6detail14DefaultDisplay17QueryVrrSupportedEPb";
     for (u32 index = 0; index < *count; ++index) {
@@ -125,12 +125,13 @@ void ReportVrrSupported(std::span<u8> image, std::string_view module_name) {
         // mov w8, #1; strb w8, [x1]; mov w0, #0; ret
         static constexpr std::array<u32, 4> Code{0x52800028, 0x39000028, 0x52800000, 0xd65f03c0};
         if (*value + sizeof(Code) > image.size()) {
-            return;
+            return false;
         }
         std::memcpy(image.data() + *value, Code.data(), sizeof(Code));
         LOG_INFO(Loader, "{}: QueryVrrSupported at {:#x} now reports VRR support", module_name, *value);
-        return;
+        return true;
     }
+    return false;
 }
 } // Anonymous namespace
 
@@ -273,7 +274,11 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
         std::copy(pi_header.begin() + sizeof(NSOHeader), pi_header.end(), patchable_section.data());
     }
     if (name == "sdk") {
-        ReportVrrSupported(std::span{codeset.memory}.subspan(module_start), name);
+        if (!ReportVrrSupported(std::span{codeset.memory}.subspan(module_start), name)) {
+            LOG_WARNING(Loader, "sdk: QueryVrrSupported was not patched. The game will assume a "
+                                "fixed 60 Hz display, and its speed will follow the frame rate. "
+                                "EDEN_NX2_REPORT_VRR=0 leaves this unpatched on purpose.");
+        }
     }
 
 #ifdef HAS_NCE
