@@ -133,6 +133,108 @@ bool ReportVrrSupported(std::span<u8> image, std::string_view module_name) {
     }
     return false;
 }
+
+// Donkey Kong Bananza build e25c90c1c136638885659fd55bf8a03b3403489d. The camera setter stores
+// its far argument at +0x1cc, and a visibility test rejects a point when that far is closer than
+// the point. These three instructions place a fresh far in s1 and then call that setter on the
+// camera itself. Callers that reload +0x1cc are left alone, so the scale is applied once per
+// update. s2 is written by the next use at every site, so the trampoline may borrow it. The
+// radius setter at 0x2673ac is not this far and is not patched.
+void ScaleBananzaCameraFar(std::span<u8> image, const NSOHeader& header) {
+    static constexpr std::array<u8, 0x20> kBuildId{
+        0xe2, 0x5c, 0x90, 0xc1, 0xc1, 0x36, 0x63, 0x88, 0x85, 0x65, 0x9f,
+        0xd5, 0x5b, 0xf8, 0xa0, 0x3b, 0x34, 0x03, 0x48, 0x9d,
+    };
+    if (header.build_id != kBuildId || header.segments[0].location != 0) {
+        return;
+    }
+    static const float scale = [] {
+        const char* value = std::getenv("EDEN_NX2_FAR_SCALE");
+        if (value == nullptr || value[0] == '\0') {
+            return 1.0f;
+        }
+        char* end = nullptr;
+        const float parsed = std::strtof(value, &end);
+        if (end == value || *end != '\0' || parsed < 0.25f || parsed > 1.0f) {
+            LOG_WARNING(Loader, "EDEN_NX2_FAR_SCALE={} is ignored. Use a fraction from 0.25 to 1",
+                        value);
+            return 1.0f;
+        }
+        return parsed;
+    }();
+    if (scale >= 0.999f) {
+        return;
+    }
+
+    struct Site {
+        u32 pc;
+        u32 original;
+    };
+    // fmov s1, s9 from the projection far at +0x9c; the same fmov from the virtual getter;
+    // fadd s1, s1, s2 after a record far is increased by 4000.
+    static constexpr std::array<Site, 3> kSites{{
+        {0x827c8, 0x1e204121},
+        {0x1881ac, 0x1e204121},
+        {0x193dd28, 0x1e222821},
+    }};
+    constexpr u32 kCaveBytes = 20;
+    constexpr u32 kLdrS2Literal = 0x1C000062; // ldr s2, #12, the float after the return branch
+    constexpr u32 kFmulS1S2 = 0x1E220821;     // fmul s1, s1, s2
+    const u64 text_end = header.segments[0].size;
+    const u64 code_end = PageAlignSize(static_cast<u32>(text_end));
+    const u64 cave_bytes = u64{kSites.size()} * kCaveBytes;
+    if (text_end + cave_bytes > code_end || text_end + cave_bytes > image.size()) {
+        LOG_WARNING(Loader, "Bananza camera far was not patched: no room in the executable text");
+        return;
+    }
+    for (const Site& site : kSites) {
+        if (u64{site.pc} + 4 > image.size()) {
+            LOG_WARNING(Loader, "Bananza camera far was not patched: a site is past the image");
+            return;
+        }
+        u32 word = 0;
+        std::memcpy(&word, image.data() + site.pc, sizeof(word));
+        if (word != site.original) {
+            LOG_WARNING(Loader, "Bananza camera far was not patched: {:#x} is {:#x}, not {:#x}",
+                        site.pc, word, site.original);
+            return;
+        }
+    }
+
+    const auto encode_branch = [](u64 pc, u64 target) -> std::optional<u32> {
+        const s64 delta = static_cast<s64>(target) - static_cast<s64>(pc);
+        if (delta % 4 != 0) {
+            return std::nullopt;
+        }
+        const s64 imm = delta / 4;
+        if (imm < -(1 << 25) || imm >= (1 << 25)) {
+            return std::nullopt;
+        }
+        return static_cast<u32>(0x14000000u | (static_cast<u32>(imm) & 0x03ffffffu));
+    };
+    std::array<u32, kSites.size()> entry{};
+    std::array<u32, kSites.size()> back{};
+    for (size_t index = 0; index < kSites.size(); ++index) {
+        const u64 cave = text_end + index * kCaveBytes;
+        const auto entry_word = encode_branch(kSites[index].pc, cave);
+        const auto back_word = encode_branch(cave + 12, u64{kSites[index].pc} + 4);
+        if (!entry_word || !back_word) {
+            LOG_WARNING(Loader, "Bananza camera far was not patched: a branch does not fit");
+            return;
+        }
+        entry[index] = *entry_word;
+        back[index] = *back_word;
+    }
+    for (size_t index = 0; index < kSites.size(); ++index) {
+        const Site& site = kSites[index];
+        const u64 cave = text_end + index * kCaveBytes;
+        const u32 words[4] = {site.original, kLdrS2Literal, kFmulS1S2, back[index]};
+        std::memcpy(image.data() + cave, words, sizeof(words));
+        std::memcpy(image.data() + cave + 16, &scale, sizeof(scale));
+        std::memcpy(image.data() + site.pc, &entry[index], sizeof(entry[index]));
+    }
+    LOG_INFO(Loader, "Bananza camera far multiplied by {}", scale);
+}
 } // Anonymous namespace
 
 bool NSOHeader::IsSegmentCompressed(size_t segment_num) const {
@@ -349,6 +451,10 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
         if (!cheats.empty()) {
             system.RegisterCheatList(cheats, nso_header.build_id, load_base, image_size);
         }
+    }
+
+    if (name == "main") {
+        ScaleBananzaCameraFar(std::span{codeset.memory}.subspan(module_start), nso_header);
     }
 
     // Load codeset for current process
