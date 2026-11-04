@@ -133,6 +133,82 @@ bool ReportVrrSupported(std::span<u8> image, std::string_view module_name) {
     }
     return false;
 }
+
+// Donkey Kong Bananza's main (build e25c90c1c136638885659fd55bf8a03b3403489d) stores a clip
+// distance in one function, then uses that same value for the rest of the call. The function
+// starts with pacibsp; sub sp, sp, #0x30. EDEN_NX2_FAR_SCALE=<fraction> multiplies the distance
+// in a trampoline at the end of the executable text, then runs the original prologue. Unset, 1,
+// or any other build leaves the game alone. A fraction below 0.25 is ignored.
+void ScaleBananzaFarClip(std::span<u8> image, const NSOHeader& header) {
+    static constexpr std::array<u8, 0x20> kBuildId{
+        0xe2, 0x5c, 0x90, 0xc1, 0xc1, 0x36, 0x63, 0x88, 0x85, 0x65, 0x9f,
+        0xd5, 0x5b, 0xf8, 0xa0, 0x3b, 0x34, 0x03, 0x48, 0x9d,
+    };
+    if (header.build_id != kBuildId || header.segments[0].location != 0) {
+        return;
+    }
+    static const float scale = [] {
+        const char* value = std::getenv("EDEN_NX2_FAR_SCALE");
+        if (value == nullptr || value[0] == '\0') {
+            return 1.0f;
+        }
+        char* end = nullptr;
+        const float parsed = std::strtof(value, &end);
+        if (end == value || *end != '\0' || parsed < 0.25f || parsed > 1.0f) {
+            LOG_WARNING(Loader, "EDEN_NX2_FAR_SCALE={} is ignored. Use a fraction from 0.25 to 1",
+                        value);
+            return 1.0f;
+        }
+        return parsed;
+    }();
+    if (scale >= 0.999f) {
+        return;
+    }
+
+    constexpr u64 kFunction = 0x2673ac;
+    constexpr u32 kPacibsp = 0xD503237F;
+    constexpr u32 kSubSp = 0xD100C3FF;
+    constexpr u64 kCaveBytes = 20;
+    const u64 text_end = header.segments[0].size;
+    const u64 code_end = PageAlignSize(static_cast<u32>(text_end));
+    if (kFunction + 8 > image.size() || text_end + kCaveBytes > code_end ||
+        text_end + kCaveBytes > image.size()) {
+        LOG_WARNING(Loader, "Bananza far clip was not patched: no room in the executable text");
+        return;
+    }
+    u32 prologue = 0;
+    u32 next = 0;
+    std::memcpy(&prologue, image.data() + kFunction, sizeof(prologue));
+    std::memcpy(&next, image.data() + kFunction + 4, sizeof(next));
+    if (prologue != kPacibsp || next != kSubSp) {
+        LOG_WARNING(Loader, "Bananza far clip was not patched: the function prologue does not match");
+        return;
+    }
+
+    const auto encode_branch = [](u64 pc, u64 target) -> std::optional<u32> {
+        const s64 delta = static_cast<s64>(target) - static_cast<s64>(pc);
+        if (delta % 4 != 0) {
+            return std::nullopt;
+        }
+        const s64 imm = delta / 4;
+        if (imm < -(1 << 25) || imm >= (1 << 25)) {
+            return std::nullopt;
+        }
+        return static_cast<u32>(0x14000000u | (static_cast<u32>(imm) & 0x03ffffffu));
+    };
+    const u64 cave = text_end;
+    const auto entry = encode_branch(kFunction, cave);
+    const auto back = encode_branch(cave + 12, kFunction + 4);
+    if (!entry || !back) {
+        return;
+    }
+    // ldr s1, #16; fmul s0, s0, s1; pacibsp; b back to sub sp. The float sits after the branch.
+    const u32 words[4] = {0x1C000081u, 0x1E210800u, kPacibsp, *back};
+    std::memcpy(image.data() + cave, words, sizeof(words));
+    std::memcpy(image.data() + cave + 16, &scale, sizeof(scale));
+    std::memcpy(image.data() + kFunction, &*entry, sizeof(*entry));
+    LOG_INFO(Loader, "Bananza far clip at {:#x} multiplied by {}", kFunction, scale);
+}
 } // Anonymous namespace
 
 bool NSOHeader::IsSegmentCompressed(size_t segment_num) const {
@@ -349,6 +425,10 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
         if (!cheats.empty()) {
             system.RegisterCheatList(cheats, nso_header.build_id, load_base, image_size);
         }
+    }
+
+    if (load_into_process && name == "main") {
+        ScaleBananzaFarClip(std::span{codeset.memory}.subspan(module_start), nso_header);
     }
 
     // Load codeset for current process

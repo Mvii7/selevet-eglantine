@@ -115,10 +115,12 @@ NUP containers load, and a loose dump can be packed from the game list (`Convert
 
 A vertex, index, or storage buffer the guest has not written since its last upload is not scanned again. The first time that happens, and again at 100000, the log says `Clean buffer uploads skipped`.
 
+`EDEN_NX2_FAR_SCALE=0.5` in `nx2_switches.txt` multiplies Donkey Kong Bananza's clip distance before that build of `main` stores it. The fraction is from 0.25 to 1. Leave the line out, or set 1, and the game is unchanged. The log says `Bananza far clip` when the patch is applied. A shorter distance also changes the normal camera, not only the hilltop.
+
 ## License and AI disclosure
 
 GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.
 
 The changes in this repo were written with Claude (Anthropic), then tested in-game by the repo owner. They have not been reviewed by the Eglantine developers.
 
-The NUP loader, the 30 FPS checkbox, and the clean buffer upload skip were written with Grok 4.7.
+The NUP loader, the 30 FPS checkbox, the clean buffer upload skip, and the Bananza far-clip scale were written with Grok 4.7.
