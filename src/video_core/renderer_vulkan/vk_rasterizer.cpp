@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -884,92 +883,6 @@ void NoteDrawProbe(Tegra::MemoryManager& gpu_memory, Tegra::Engines::Maxwell3D& 
     ++slot->samples;
 }
 
-bool ReadCbufColumn(Tegra::MemoryManager& gpu_memory, const Tegra::Engines::ConstBufferInfo& buffer,
-                    float& x, float& y, float& z) {
-    if (!buffer.enabled || buffer.size < 48 || !gpu_memory.IsFullyMappedRange(buffer.address, 48)) {
-        return false;
-    }
-    float words[12];
-    gpu_memory.ReadBlockUnsafe(buffer.address, words, sizeof(words));
-    x = words[3];
-    y = words[7];
-    z = words[11];
-    return std::isfinite(x) && std::isfinite(y) && std::isfinite(z);
-}
-
-// The two shaders that dominate the hilltop vista draw a 90-index mesh and keep its world
-// translation in constant buffer 4. Constant buffer 7 stays still across those draws: the camera.
-// EDEN_NX2_DRAW_DISTANCE=0 turns the drop off. Any other number is the distance past which the
-// mesh is not drawn.
-bool SkipFarProp(Tegra::MemoryManager& gpu_memory, Tegra::Engines::Maxwell3D& maxwell3d,
-                 bool is_indexed, u32 instance_count) {
-    static const float max_dist2 = [] {
-        const char* value = std::getenv("EDEN_NX2_DRAW_DISTANCE");
-        if (value != nullptr && value[0] == '0' && value[1] == '\0') {
-            return 0.f;
-        }
-        const float distance = value != nullptr && value[0] != '\0' ? std::strtof(value, nullptr) : 450.f;
-        return distance > 0.f ? distance * distance : 0.f;
-    }();
-    if (max_dist2 <= 0.f || !is_indexed || instance_count > 1) {
-        return false;
-    }
-    const auto& draw = maxwell3d.draw_manager.draw_state;
-    if (draw.index_buffer.count != 90) {
-        return false;
-    }
-    const auto& stage = maxwell3d.state.shader_stages[0];
-    const auto& object = stage.const_buffers[4];
-    if (!object.enabled || object.size < 100 || !gpu_memory.IsFullyMappedRange(object.address + 96, 4)) {
-        return false;
-    }
-    u32 marker = 0;
-    gpu_memory.ReadBlockUnsafe(object.address + 96, &marker, sizeof(marker));
-    if (marker != 0x3f800000u) {
-        return false;
-    }
-    float object_x = 0.f;
-    float object_y = 0.f;
-    float object_z = 0.f;
-    if (!ReadCbufColumn(gpu_memory, object, object_x, object_y, object_z)) {
-        return false;
-    }
-    static float camera_x = 0.f;
-    static float camera_y = 0.f;
-    static float camera_z = 0.f;
-    static bool have_camera = false;
-    float next_x = 0.f;
-    float next_y = 0.f;
-    float next_z = 0.f;
-    if (ReadCbufColumn(gpu_memory, stage.const_buffers[7], next_x, next_y, next_z) &&
-        std::abs(next_x) + std::abs(next_y) + std::abs(next_z) > 1.f) {
-        camera_x = next_x;
-        camera_y = next_y;
-        camera_z = next_z;
-        have_camera = true;
-    }
-    if (!have_camera) {
-        return false;
-    }
-    const float dx = object_x - camera_x;
-    const float dy = object_y - camera_y;
-    const float dz = object_z - camera_z;
-    const float dist2 = dx * dx + dy * dy + dz * dz;
-    if (dist2 <= max_dist2) {
-        return false;
-    }
-    static u64 skipped = 0;
-    ++skipped;
-    if (skipped == 1 || skipped == 100000 || skipped % 1000000 == 0) {
-        LOG_INFO(HW_GPU,
-                 "Far draws skipped {} (distance {:.0f}, limit {:.0f}, camera {:.0f} {:.0f} {:.0f}, "
-                 "object {:.0f} {:.0f} {:.0f})",
-                 skipped, std::sqrt(dist2), std::sqrt(max_dist2), camera_x, camera_y, camera_z, object_x,
-                 object_y, object_z);
-    }
-    return true;
-}
-
 void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
     Tegra::g_nx2_draw_count.fetch_add(1, std::memory_order_relaxed);
     NoteDrawProbe(*gpu_memory, *maxwell3d, false);
@@ -1084,10 +997,6 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
         }
     }
     if (SkipShadowPass(*maxwell3d)) {
-        gpu.TickWork();
-        return;
-    }
-    if (SkipFarProp(*gpu_memory, *maxwell3d, is_indexed, instance_count)) {
         gpu.TickWork();
         return;
     }
