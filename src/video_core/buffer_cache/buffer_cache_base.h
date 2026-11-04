@@ -361,10 +361,6 @@ public:
         current_draw_indirect = current_draw_indirect_;
     }
 
-    [[nodiscard]] bool HasDrawIndirect() const noexcept {
-        return current_draw_indirect != nullptr;
-    }
-
     [[nodiscard]] std::pair<Buffer*, u32> GetDrawIndirectCount();
 
     [[nodiscard]] std::pair<Buffer*, u32> GetDrawIndirectBuffer();

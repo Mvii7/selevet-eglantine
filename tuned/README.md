@@ -122,8 +122,6 @@ Donkey Kong Bananza's hilltop layer is a larger terrain than the earlier worlds.
 
 The command-entry batch keeps the entries that are still being read, up to 16384, instead of the first 1024 from earlier areas.
 
-The colour pass still walks every rock. When the next draw uses the same pipeline, buffers, and textures as the one just recorded, that setup stays and only the draw is recorded. `EDEN_NX2_DRAW_REUSE=0` builds the setup every time. The first time a draw keeps the previous setup it logs `Draw setup reused`.
-
 A vertex, index, or storage buffer the guest has not written since its last upload is not scanned again. The first time that happens, and again at 100000, the log says `Clean buffer uploads skipped`.
 
 ## License and AI disclosure
@@ -132,4 +130,4 @@ GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.
 
 The changes in this repo were written with Claude (Anthropic), then tested in-game by the repo owner. They have not been reviewed by the Eglantine developers.
 
-The NUP loader, the 30 FPS checkbox, the draw-setup reuse, and the clean buffer upload skip were written with Grok 4.7.
+The NUP loader, the 30 FPS checkbox, and the clean buffer upload skip were written with Grok 4.7.

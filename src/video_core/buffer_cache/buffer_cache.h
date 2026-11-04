@@ -169,7 +169,6 @@ void BufferCache<P>::UnmapGPUMemory(size_t as_id, GPUVAddr gpu_addr, size_t size
 
 template <class P>
 void BufferCache<P>::WriteMemory(DAddr device_addr, u64 size) {
-    Tegra::Nx2BumpDrawMemory();
     CacheTrackingDiagnostics::Record(CacheTrackingDiagnostics::Event::BufferCpuMark,
                                       device_addr, size);
     if (IsRegionGpuModified(device_addr, size)) {
@@ -198,7 +197,6 @@ void BufferCache<P>::CachedWriteMemory(DAddr device_addr, u64 size) {
     CacheTrackingDiagnostics::Record(CacheTrackingDiagnostics::Event::BufferInlineRetain,
                                       device_addr, size, aligned_start, aligned_end - aligned_start);
     InlineMemoryImplementation(device_addr, size, tmp_buffer);
-    Tegra::Nx2BumpDrawMemory();
 }
 
 template <class P>
@@ -208,7 +206,6 @@ bool BufferCache<P>::OnCPUWrite(DAddr device_addr, u64 size) {
         return false;
     }
     if (memory_tracker.IsRegionGpuModified(device_addr, size)) {
-        Tegra::Nx2BumpDrawMemory();
         return true;
     }
     WriteMemory(device_addr, size);
@@ -422,7 +419,6 @@ void BufferCache<P>::BindGraphicsUniformBuffer(size_t stage, u32 index, GPUVAddr
         .buffer_id = BufferId{},
     };
     slot = binding;
-    Tegra::Nx2BumpDrawMemory();
 }
 
 template <class P>
@@ -432,7 +428,6 @@ void BufferCache<P>::DisableGraphicsUniformBuffer(size_t stage, u32 index) {
         return;
     }
     slot = NULL_BINDING;
-    Tegra::Nx2BumpDrawMemory();
 }
 
 template <class P>
@@ -2314,12 +2309,10 @@ void BufferCache<P>::DeleteBuffer(BufferId buffer_id, bool do_not_mark) {
     read_trapped_ranges.Subtract(slot_buffers[buffer_id].CpuAddr(),
                                  slot_buffers[buffer_id].SizeBytes());
     bool dirty_index{false};
-    bool drop_setup = false;
     boost::container::small_vector<u64, NUM_VERTEX_BUFFERS> dirty_vertex_buffers;
-    const auto scalar_replace = [&](Binding& binding) {
+    const auto scalar_replace = [buffer_id](Binding& binding) {
         if (binding.buffer_id == buffer_id) {
             binding.buffer_id = BufferId{};
-            drop_setup = true;
         }
     };
     const auto replace = [scalar_replace](std::span<Binding> bindings) {
@@ -2368,7 +2361,6 @@ void BufferCache<P>::DeleteBuffer(BufferId buffer_id, bool do_not_mark) {
     auto& flags = maxwell3d->dirty.flags;
     if (dirty_index) {
         flags[Dirty::IndexBuffer] = true;
-        drop_setup = true;
     }
 
     if (dirty_vertex_buffers.size() > 0) {
@@ -2376,10 +2368,6 @@ void BufferCache<P>::DeleteBuffer(BufferId buffer_id, bool do_not_mark) {
         for (auto index : dirty_vertex_buffers) {
             flags[Dirty::VertexBuffer0 + index] = true;
         }
-        drop_setup = true;
-    }
-    if (drop_setup) {
-        Tegra::Nx2BumpDrawMemory();
     }
     channel_state->has_deleted_buffers = true;
 }
