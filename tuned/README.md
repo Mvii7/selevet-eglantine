@@ -91,7 +91,7 @@ Graphics settings has **Limit speed to 30 FPS**. It holds presents to 30 per sec
 
 ## Speed when a frame misses 60
 
-Donkey Kong Bananza version 458752 keeps the frame's measured rate, clamped between 20 and 60 Hz, and does not wait out a 2 or 3 vsync step. The frame fill stays 1/60, so a slow measurement does not hold the next frame open. At 100% the host lets the game time its own frames. The 30 FPS limit, and a speed limit other than 100%, still pace presents. `EDEN_NX2_FRAME_RATE=0` leaves the game's rate code unchanged.
+Donkey Kong Bananza version 458752 clamps the measured rate to 20-60 Hz. At 39 Hz and below a frame steps two or three vsyncs, and that choice is applied on the same frame. The frame fill stays 1/60, so a slow frame does not hold the next one open. At 100% the host lets the game time its own frames. The 30 FPS limit, and a speed limit other than 100%, still pace presents. `EDEN_NX2_FRAME_RATE=0` leaves the game's rate code unchanged.
 
 ## Build 104 merge
 
