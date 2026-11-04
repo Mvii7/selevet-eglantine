@@ -140,9 +140,10 @@ bool ReportVrrSupported(std::span<u8> image, std::string_view module_name) {
 // it asks the display for one vsync at that rate, and at 39 Hz or below it stores (rate + 59) / rate
 // vsyncs and replaces the rate with 60, 30 or 20. 0x1578e94 then spins until 99% of that interval
 // has passed, and a late frame at 0x204450 / 0x20454c forces the interval to 2 or 3. The rate is
-// clamped to 20-60 Hz, the interval stays 1, and those waits return at once. A 40 Hz frame still
-// advances one vsync of 1/60 unless the game steps by this same rate. EDEN_NX2_FRAME_RATE=0 leaves
-// the instructions alone. A build whose bytes differ is left alone.
+// clamped to 20-60 Hz, the interval stays 1, and those waits return at once. The fill at 0x204328
+// was 1 over the stored rate, so a 30 Hz measurement held the next frames at about 33 ms. It now
+// fills to 1/60. A 40 Hz frame still advances one vsync of 1/60 unless the game steps by this same
+// rate. EDEN_NX2_FRAME_RATE=0 leaves the instructions alone. A build whose bytes differ is left alone.
 bool PatchBananzaFrameRate(std::span<u8> image) {
     static const bool enabled = [] {
         const char* value = std::getenv("EDEN_NX2_FRAME_RATE");
@@ -163,7 +164,7 @@ bool PatchBananzaFrameRate(std::span<u8> image) {
     if (image.size() < 0x1578e98 || word(0x20494c) != 0x2a0103f3 || word(0x204950) != 0x6b01011f ||
         word(0x204988) != 0x39072c09 || word(0x204990) != 0x5400010d || word(0x204994) != 0x35000348 ||
         word(0x2049b0) != 0xf90007e0 || word(0x2049fc) != 0xf940bc08 || word(0x1578e94) != 0xd503237f ||
-        word(0x204450) != 0x944de3fa || word(0x20454c) != 0x944de3bb) {
+        word(0x204328) != 0x5e21d800 || word(0x204450) != 0x944de3fa || word(0x20454c) != 0x944de3bb) {
         return false;
     }
     // From 0x20494c, which was `mov w19, w1`. The cave does that mov, then comes back to the compare.
@@ -175,13 +176,18 @@ bool PatchBananzaFrameRate(std::span<u8> image) {
                                     0x54000049, 0x52800793, 0x2a1303e1, 0x17ffffe0};
     static_assert(sizeof(Cave) == 0x2049d4 - 0x2049b0);
     std::memcpy(image.data() + 0x2049b0, Cave, sizeof(Cave));
-    for (u32 offset = 0x2049d4; offset < 0x2049fc; offset += 4) {
+    // scvtf of the stored rate became the fill length. Replace it with float 60, so the fill is 1/60.
+    put(0x204328, 0x140001ab); // b 0x2049d4
+    put(0x2049d4, 0x52800791); // mov w17, #60
+    put(0x2049d8, 0x1e270220); // fmov s0, w17
+    put(0x2049dc, 0x17fffe54); // b 0x20432c
+    for (u32 offset = 0x2049e0; offset < 0x2049fc; offset += 4) {
         put(offset, 0xd503201f);
     }
     put(0x1578e94, 0xd65f03c0); // ret
     put(0x204450, 0xd503201f);
     put(0x20454c, 0xd503201f);
-    LOG_INFO(Loader, "Bananza 458752: frame rate stays on the measured 20-60 Hz");
+    LOG_INFO(Loader, "Bananza 458752: frame rate 20-60 Hz, frame fill stays 1/60");
     return true;
 }
 } // Anonymous namespace
