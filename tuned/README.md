@@ -87,11 +87,13 @@ To train your own profile, build with `tuned/pgo-gen-cache.cmake`, run with `LLV
 
 ## 30 FPS limit
 
-Graphics settings has **Limit speed to 30 FPS**. It holds presents to 30 per second and applies without restarting. The old separate 30 FPS download set `EDEN_NX2_PRESENT_HZ=30` in `nx2_switches.txt`. That line is no longer read.
+Graphics settings has **Limit speed to 30 FPS**. It stops presents faster than 30 per second and applies without restarting. A game that asks for a slower present keeps that slower rate. The old separate 30 FPS download set `EDEN_NX2_PRESENT_HZ=30` in `nx2_switches.txt`. That line is no longer read.
 
 ## Speed when a frame misses 60
 
-Reporting VRR does not keep Donkey Kong Bananza at full speed. The game still advances by one, two or three 60 Hz ticks, and a frame between those rates is either slow or, once the interval catches up, briefly fast. Bananza's step now follows how long the frame actually took, so it stays at full speed without the 30 FPS limit. That checkbox is unchanged: turn it on and presents still wait for 30 per second. A change that lasts two frames is taken whole; a single hitch only eases the step a tenth of the way, and the time that hitch did not step is not added to the next frame. A frame longer than 1/20 s still slows the game down. `EDEN_NX2_DECOUPLE_DT_CAP=N` sets that cap to 1/N seconds, with N from 10 to 60 and `0` meaning 1/10. `EDEN_NX2_DECOUPLE=0` leaves the game's own step. The emulation speed percentage still scales the step.
+Present word 12 says how many vblanks the frame should hold. Returning after one vblank when the game asked for two makes that frame run at double speed, and returning at 60 Hz while the game is still stepping one vblank makes a missed frame run slow. Each present now waits out the interval it requested. A present that misses its slot is shown immediately, and the next one still waits a full interval, so the miss is not paid back.
+
+Reporting VRR does not change Bananza's own step. That step is still one, two or three 60 Hz ticks unless the loader rewrites it. The rewrite looks for one integer-to-seconds calculation. This build of the game did not contain the sequences it knows, and the log says so. `EDEN_NX2_DECOUPLE=0` leaves the step alone. `EDEN_NX2_DECOUPLE_DT_CAP=N` sets the cap to 1/N seconds when a rewrite does apply, with N from 10 to 60 and `0` meaning 1/10.
 
 ## Build 104 merge
 

@@ -25,6 +25,7 @@ add_executable(tests
     core/nx2_core_readback_capacity.cpp
     core/nso.cpp
     core/nx2_decouple.cpp
+    core/nx2_present_pacer.cpp
     core/nrr.cpp
     core/ncz_decompressor.cpp
     core/nup_writer.cpp

@@ -33,6 +33,7 @@
 #include "core/core.h"
 #include "core/hle/service/nx2_frame_step.h"
 #include "core/hle/service/nx2_present.h"
+#include "core/hle/service/nx2_present_pacer.h"
 #include "core/hle/service/nx2_sparse_region.h"
 #include "core/device_memory.h"
 #include "video_core/rasterizer_interface.h"
@@ -1510,7 +1511,7 @@ private:
         const auto waited = std::chrono::steady_clock::now();
         Composite(w[5], ~w[22], w[24], w[6], w[7], w[8]);
         const auto composited = std::chrono::steady_clock::now();
-        PaceToVblank();
+        PaceToVblank(w[12]);
         const auto paced = std::chrono::steady_clock::now();
         // Where each frame's time goes on the present thread, averaged per 600 presents: the
         // game is blocked here while Eden's GPU thread catches up (fence) and composites.
@@ -1562,20 +1563,22 @@ private:
     u32 m_previous_fence_id{~0U}; // none yet (WaitForFrame ignores ids >= 192)
     u32 m_previous_fence_value{};
 
-    // The console flips one frame per 60 Hz vblank and keeps the rest queued, so a game can't
-    // present faster than that. Every slot is reported free here: hold each present until the
-    // next vblank instead (title 4 ran at up to 160 fps, its timing and audio with it).
+    // The console flips one frame per vblank and keeps the rest queued. Present word 12 is
+    // (swap interval << 16) | refresh. A game that asks for two vblanks runs at double speed if
+    // every present returns after one. A missed slot is not repaid with another immediate present.
+    Nx2PresentPacer m_present_pacer;
     std::chrono::steady_clock::time_point m_next_vblank{};
+    u32 m_paced_interval{};
+    u32 m_paced_refresh{};
 
-    void PaceToVblank() {
-        // "Limit speed to 30 FPS" holds presents to 30. Otherwise the cap is 60.
-        // Bananza does not need the 30 cap for full speed: its step follows this present.
+    void PaceToVblank(u32 timing) {
+        // "Limit speed to 30 FPS" stops presents faster than 30. A request for three vblanks stays.
         const bool cap_30 = Settings::values.limit_speed_to_30.GetValue();
         const bool speed_limited =
             Settings::values.use_speed_limit.GetValue() && Settings::SpeedLimit() != 0;
         const double speed_scale =
             speed_limited ? static_cast<double>(Settings::SpeedLimit()) / 100.0 : 1.0;
-        // Recorded after any wait below, so the step is the time the frame actually took.
+        // Recorded after any wait below, so a patched step is the time the frame actually took.
         const auto note = [&] {
             Nx2NotePresentedFrame(system.ApplicationMemory(), std::chrono::steady_clock::now(),
                                   speed_scale);
@@ -1584,14 +1587,20 @@ private:
             note();
             return;
         }
-        const long long present_hz = cap_30 ? 30LL : 60LL;
-        static long long logged_hz = 0;
-        if (present_hz != logged_hz) {
-            logged_hz = present_hz;
-            LOG_INFO(Service, "Present rate held to {} Hz", present_hz);
+        u32 swap_interval = std::clamp<u32>(timing >> 16, 1u, 4u);
+        if (cap_30) {
+            swap_interval = (std::max)(swap_interval, 2u);
+        }
+        const u32 refresh_rate = (timing & 0xffff) >= 30 && (timing & 0xffff) <= 240 ? timing & 0xffff : 60;
+        if (swap_interval != m_paced_interval || refresh_rate != m_paced_refresh) {
+            m_paced_interval = swap_interval;
+            m_paced_refresh = refresh_rate;
+            LOG_INFO(Service, "nx2:vi2 present #{} interval {} at {} Hz (word 12 = {:#x})",
+                     m_presents, swap_interval, refresh_rate, timing);
         }
         const auto interval = std::chrono::nanoseconds{
-            100'000'000'000LL / present_hz / (speed_limited ? Settings::SpeedLimit() : 100)};
+            100'000'000'000LL * swap_interval / refresh_rate /
+            (speed_limited ? Settings::SpeedLimit() : 100)};
         const auto now = std::chrono::steady_clock::now();
         // EDEN_NX2_VBLANK_ALIGN=1: a late frame waits for the next vblank, as on a fixed-rate
         // console display. Off: the SDK now reports VRR (nso.cpp), and title 4 then times its own
@@ -1615,13 +1624,11 @@ private:
             note();
             return;
         }
-        if (now > m_next_vblank + interval) {
-            // Running slower than 60 fps: show at once and don't bank the lost time.
-            m_next_vblank = now;
-        } else if (now < m_next_vblank) {
-            std::this_thread::sleep_until(m_next_vblank);
+        const auto step = m_present_pacer.Advance(now, interval);
+        if (step.sleep) {
+            std::this_thread::sleep_until(step.deadline);
         }
-        m_next_vblank += interval;
+        m_next_vblank = step.deadline + interval;
         note();
     }
 

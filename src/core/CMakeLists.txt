@@ -1161,6 +1161,7 @@ add_library(core STATIC
     hle/service/nx2_frame_step.cpp
     hle/service/nx2_frame_step.h
     hle/service/nx2_decouple.h
+    hle/service/nx2_present_pacer.h
     loader/nsp.cpp
     loader/nsp.h
     loader/nup.cpp
