@@ -62,24 +62,6 @@ struct WordManager {
         return upload_words != 0;
     }
 
-    /// True when this subrange still has a CPU or untracked bit. Other bits in the page do not count.
-    [[nodiscard]] bool RangeHasPendingUpload(u64 offset, u64 size) const noexcept {
-        if (upload_words == 0 || size == 0) {
-            return false;
-        }
-        const std::span<const u64> cpu_words = Span(Type::CPU);
-        const std::span<const u64> untracked_words = Span(Type::Untracked);
-        bool pending = false;
-        IterateWords(static_cast<size_t>(offset), static_cast<size_t>(size), [&](size_t index, u64 mask) {
-            if (((cpu_words[index] | untracked_words[index]) & mask) != 0) {
-                pending = true;
-                return true;
-            }
-            return false;
-        });
-        return pending;
-    }
-
     static u64 ExtractBits(u64 word, size_t page_start, size_t page_end) {
         constexpr size_t number_bits = sizeof(u64) * 8;
         const size_t limit_page_end = number_bits - (std::min)(page_end, number_bits);
