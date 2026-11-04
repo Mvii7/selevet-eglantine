@@ -155,8 +155,8 @@ void ScaleBananzaCameraFar(std::span<u8> image, const NSOHeader& header) {
         }
         char* end = nullptr;
         const float parsed = std::strtof(value, &end);
-        if (end == value || *end != '\0' || parsed < 0.25f || parsed > 1.0f) {
-            LOG_WARNING(Loader, "EDEN_NX2_FAR_SCALE={} is ignored. Use a fraction from 0.25 to 1",
+        if (end == value || *end != '\0' || parsed < 0.1f || parsed > 1.0f) {
+            LOG_WARNING(Loader, "EDEN_NX2_FAR_SCALE={} is ignored. Use a fraction from 0.1 to 1",
                         value);
             return 1.0f;
         }
