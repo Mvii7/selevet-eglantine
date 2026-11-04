@@ -319,8 +319,9 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
                 if (step.patch) {
                     frame_step_offset = step.patch->float_offset;
                     LOG_INFO(Loader,
-                             "Bananza frame step at {:#x} follows the measured frame, capped at 1/{} s",
-                             step.patch->site_offset, Service::Nx2DecoupleCapDenominator());
+                             "Bananza frame step at {:#x} follows the measured frame ({} site{}), capped at 1/{} s",
+                             step.patch->site_offset, step.applied, step.applied == 1 ? "" : "s",
+                             Service::Nx2DecoupleCapDenominator());
                 } else {
                     LOG_WARNING(Loader,
                                 "Bananza frame step was not patched ({} reciprocal, {} scale, {} divide, "

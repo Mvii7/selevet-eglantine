@@ -1594,8 +1594,7 @@ private:
         const u32 requested_interval = std::clamp<u32>(timing >> 16, 1u, 4u);
         const u32 requested_refresh =
             (timing & 0xffff) >= 30 && (timing & 0xffff) <= 240 ? timing & 0xffff : 60;
-        const bool bananza =
-            Kernel::GetCurrentProcess(system.Kernel()).GetProgramId() == Nx2BananzaProgramId;
+        const bool bananza = system.GetApplicationProcessProgramID() == Nx2BananzaProgramId;
         u32 swap_interval = bananza ? 1u : requested_interval;
         u32 refresh_rate = bananza ? 60u : requested_refresh;
         if (cap_30) {

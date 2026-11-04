@@ -25,6 +25,11 @@ struct Tag {
     bool live(int now) const {
         return reg < kNone && now - at <= kWindow && now >= at;
     }
+
+    // Pool loads and conversions stay until the register is overwritten or a call returns.
+    bool held(int now) const {
+        return reg < kNone && now >= at;
+    }
 };
 
 u32 ReadU32(std::span<const u8> image, u64 offset) {
@@ -355,26 +360,34 @@ Found Scan(std::span<const u8> image, u64 text_off, u64 text_size, u64 load_base
             continue;
         }
         if (IsFdiv(word, sd, sn, sm)) {
-            if (chain.one.live(index) && chain.rate.live(index) && sn == chain.one.reg &&
+            if (chain.one.held(index) && chain.rate.held(index) && sn == chain.one.reg &&
                 sm == chain.rate.reg) {
                 found.sites.push_back({pc, sd, Kind::Vfr});
-            } else if (chain.conv.live(index) && chain.sixty_f.live(index) && sn == chain.conv.reg &&
+                chain.one = {};
+                chain.rate = {};
+            } else if (chain.conv.held(index) && chain.sixty_f.held(index) && sn == chain.conv.reg &&
                        sm == chain.sixty_f.reg) {
                 found.sites.push_back({pc, sd, Kind::Divide});
-            } else if (chain.one.live(index) && chain.conv.live(index) && sn == chain.one.reg &&
+                chain.conv = {};
+                chain.sixty_f = {};
+            } else if (chain.one.held(index) && chain.conv.held(index) && sn == chain.one.reg &&
                        sm == chain.conv.reg) {
                 // 1 / (float)n, with n not produced by dividing by 60. Bananza's refresh path.
                 found.sites.push_back({pc, sd, Kind::Plain});
+                chain.one = {};
+                chain.conv = {};
             }
             chain.KillWritesS(sd);
             continue;
         }
         if (IsFmul(word, sd, sn, sm)) {
-            const bool scale = chain.conv.live(index) && chain.recip.live(index) &&
+            const bool scale = chain.conv.held(index) && chain.recip.held(index) &&
                                ((sn == chain.conv.reg && sm == chain.recip.reg) ||
                                 (sn == chain.recip.reg && sm == chain.conv.reg));
             if (scale) {
                 found.sites.push_back({pc, sd, Kind::Scale});
+                chain.conv = {};
+                chain.recip = {};
             }
             chain.KillWritesS(sd);
             continue;
@@ -382,8 +395,23 @@ Found Scan(std::span<const u8> image, u64 text_off, u64 text_size, u64 load_base
         if (IsTransparent(word)) {
             continue;
         }
-        chain.Clear();
-        std::memset(page, 0, sizeof(page));
+        // A call or a branch ends the registers. Other instructions only drop integer immediates,
+        // so a pooled 1/60 still reaches the multiply that uses it.
+        const bool branch = (word & 0x7C000000) == 0x14000000 || (word & 0xFF000010) == 0x54000000 ||
+                            (word & 0x7E000000) == 0x34000000 || (word & 0x7E000000) == 0x36000000 ||
+                            (word & 0xFFFFFC1F) == 0xD61F0000 || (word & 0xFFFFFC1F) == 0xD63F0000 ||
+                            (word & 0xFFFFFC1F) == 0xD65F0000;
+        if (branch) {
+            chain.Clear();
+            std::memset(page, 0, sizeof(page));
+            continue;
+        }
+        if ((word & 0x5E000000) == 0x1E000000) {
+            chain.KillWritesS(word & 31);
+        }
+        chain.sixty = {};
+        chain.quot = {};
+        chain.bits = {};
     }
     return found;
 }
@@ -437,7 +465,6 @@ Nx2FrameStepScan Nx2PatchBananzaFrameStep(std::span<u8> image, u64 text_off, u64
         case Kind::Plain: ++result.plain; break;
         }
     }
-    const Site* chosen = nullptr;
     const auto only = [&](Kind kind) -> const Site* {
         const Site* found_site = nullptr;
         for (const auto& site : found.sites) {
@@ -447,29 +474,38 @@ Nx2FrameStepScan Nx2PatchBananzaFrameStep(std::span<u8> image, u64 text_off, u64
         }
         return found_site;
     };
+    std::vector<const Site*> chosen_sites;
     if (result.vfr == 1) {
-        chosen = only(Kind::Vfr);
-    } else if (result.vfr == 0 && result.scale == 1) {
-        chosen = only(Kind::Scale);
-    } else if (result.vfr == 0 && result.scale == 0 && result.divide == 1) {
-        chosen = only(Kind::Divide);
+        chosen_sites.push_back(only(Kind::Vfr));
+    } else if (result.vfr == 0 && result.scale + result.divide >= 1 &&
+               result.scale + result.divide <= 8) {
+        for (const auto& site : found.sites) {
+            if (site.kind == Kind::Scale || site.kind == Kind::Divide) {
+                chosen_sites.push_back(&site);
+            }
+        }
     } else if (result.vfr == 0 && result.scale == 0 && result.divide == 0 && result.plain == 1) {
-        chosen = only(Kind::Plain);
+        chosen_sites.push_back(only(Kind::Plain));
     }
-    if (chosen == nullptr || float_off + sizeof(float) > image.size() || (text_size & 3) != 0) {
+    if (chosen_sites.empty() || float_off + sizeof(float) > image.size() || (text_size & 3) != 0) {
         return result;
     }
     const u64 code_end = text_off + text_size;
-    const u64 cave = code_end;
-    const bool float_hits_cave = float_off < cave + 12 && float_off + sizeof(float) > cave;
-    if (chosen->offset < text_off || chosen->offset + 4 > code_end || cave + 12 > text_end ||
-        cave + 12 > image.size() || float_hits_cave) {
+    const u64 bytes = chosen_sites.size() * 12;
+    if (code_end + bytes > text_end || code_end + bytes > image.size() ||
+        (float_off < code_end + bytes && float_off + sizeof(float) > code_end)) {
         return result;
     }
-    if (!WriteCave(image, chosen->offset, chosen->dest, cave, float_off, load_base)) {
-        return result;
+    u64 cave = code_end;
+    for (const Site* site : chosen_sites) {
+        if (site == nullptr || site->offset < text_off || site->offset + 4 > code_end ||
+            !WriteCave(image, site->offset, site->dest, cave, float_off, load_base)) {
+            return result;
+        }
+        cave += 12;
     }
-    result.patch = Nx2FrameStepPatch{float_off, chosen->offset};
+    result.applied = static_cast<int>(chosen_sites.size());
+    result.patch = Nx2FrameStepPatch{float_off, chosen_sites.front()->offset};
     return result;
 }
 

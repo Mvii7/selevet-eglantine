@@ -31,6 +31,7 @@ struct Nx2FrameStepScan {
     int divide{};
     int plain{};
     int pooled{};
+    int applied{};
     std::optional<Nx2FrameStepPatch> patch;
 };
 

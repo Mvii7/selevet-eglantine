@@ -198,6 +198,7 @@ TEST_CASE("Bananza frame step patch follows a pooled 1/60 multiply", "[nx2]") {
     REQUIRE(scan.patch);
     CHECK(scan.scale == 1);
     CHECK(scan.pooled == 1);
+    CHECK(scan.applied == 1);
     CHECK(scan.patch->site_offset == 0x100C);
     const u32 adrp = Word(image, 0x1010);
     const u32 ldr = Word(image, 0x1014);
