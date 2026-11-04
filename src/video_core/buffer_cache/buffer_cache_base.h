@@ -545,8 +545,6 @@ private:
     u32 enabled_vertex_buffers_mask = 0;
     u64 vertex_buffers_serial = 0;
     std::array<Binding, 32> v_buffer{};
-    // Frame on which this already-bound vertex buffer was last kept alive.
-    std::array<u64, 32> vertex_bind_tick{};
 
     boost::container::small_vector<BufferCopy, 4> upload_copies;
 
