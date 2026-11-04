@@ -1561,27 +1561,31 @@ private:
     u32 m_previous_fence_id{~0U}; // none yet (WaitForFrame ignores ids >= 192)
     u32 m_previous_fence_value{};
 
-    // The console flips one frame per 60 Hz vblank and keeps the rest queued, so a game can't
-    // present faster than that. Every slot is reported free here: hold each present until the
-    // next vblank instead (title 4 ran at up to 160 fps, its timing and audio with it).
+    // The game times its own frames (nso.cpp). At 100% a present returns once the GPU fence and
+    // the composite are done. The 30 FPS limit, and a speed limit other than 100%, still hold
+    // presents to that rate. A frame later than the interval is shown at once.
     std::chrono::steady_clock::time_point m_next_vblank{};
 
     void PaceToVblank() {
-        // "Limit speed to 30 FPS" holds presents to 30. Otherwise the cap is 60.
         const bool cap_30 = Settings::values.limit_speed_to_30.GetValue();
-        const bool speed_limited =
-            Settings::values.use_speed_limit.GetValue() && Settings::SpeedLimit() != 0;
-        if (!speed_limited && !cap_30) {
+        const u16 limit = Settings::SpeedLimit();
+        const bool scale_speed =
+            Settings::values.use_speed_limit.GetValue() && limit != 0 && limit != 100;
+        static long long logged_hz = 0;
+        if (!scale_speed && !cap_30) {
+            if (logged_hz != 1) {
+                logged_hz = 1;
+                LOG_INFO(Service, "nx2:vi2 present #{} host pacing off", m_presents);
+            }
             return;
         }
         const long long present_hz = cap_30 ? 30LL : 60LL;
-        static long long logged_hz = 0;
         if (present_hz != logged_hz) {
             logged_hz = present_hz;
             LOG_INFO(Service, "Present rate held to {} Hz", present_hz);
         }
         const auto interval = std::chrono::nanoseconds{
-            100'000'000'000LL / present_hz / (speed_limited ? Settings::SpeedLimit() : 100)};
+            100'000'000'000LL / present_hz / (scale_speed ? limit : 100)};
         const auto now = std::chrono::steady_clock::now();
         // EDEN_NX2_VBLANK_ALIGN=1: a late frame waits for the next vblank, as on a fixed-rate
         // console display. Off: the SDK now reports VRR (nso.cpp), and title 4 then times its own
