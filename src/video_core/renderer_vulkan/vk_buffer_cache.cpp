@@ -11,6 +11,7 @@
 #include <span>
 #include <vector>
 
+#include "common/logging.h"
 #include "video_core/buffer_cache/buffer_cache_base.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/readback_diagnostics.h"
@@ -430,9 +431,12 @@ void BufferCacheRuntime::TickFrame(Common::SlotVector<Buffer>& slot_buffers) noe
 bool BufferCacheRuntime::BindSmallUniformReusing(
     Tegra::MaxwellDeviceMemoryManager& device_memory, size_t stage, u32 index,
     DAddr device_addr, u32 size) {
+    // Off with EDEN_NX2_UBOREUSE=0. On, a uniform whose bytes match the upload already recorded
+    // in this submission keeps that device address. The hilltop's second constant buffer is the
+    // same for long runs of rocks; the one that changes still takes the stream path below.
     static const bool enabled = [] {
         const char* value = std::getenv("EDEN_NX2_UBOREUSE");
-        return value != nullptr && value[0] == '1' && value[1] == '\0';
+        return value == nullptr || value[0] != '0';
     }();
     if (!enabled || size == 0 || size > UniformStreamReuse::MaxBytes || stage >= 5 || index >= 18) {
         return false;
@@ -443,15 +447,24 @@ bool BufferCacheRuntime::BindSmallUniformReusing(
     auto& reuse = *uniform_stream_reuse;
     auto& slot = reuse.slots[stage][index];
     device_memory.ReadBlockUnsafe(device_addr, reuse.scratch.data(), size);
-    if (slot.size != size || slot.tick != scheduler.CurrentTick() ||
-        std::memcmp(slot.bytes.data(), reuse.scratch.data(), size) != 0) {
-        slot.ref = staging_pool.Request(size, MemoryUsage::Upload, true);
-        staging_pool.FreeDeferred(slot.ref);
-        std::memcpy(slot.ref.mapped_span.data(), reuse.scratch.data(), size);
-        std::memcpy(slot.bytes.data(), reuse.scratch.data(), size);
-        slot.size = size;
-        slot.tick = scheduler.CurrentTick();
+    const u64 tick = scheduler.CurrentTick();
+    if (slot.size == size && slot.device_addr == device_addr && slot.tick == tick &&
+        std::memcmp(slot.bytes.data(), reuse.scratch.data(), size) == 0) {
+        guest_descriptor_queue.AddBuffer(slot.ref.buffer, slot.ref.device_address,
+                                        static_cast<u32>(slot.ref.offset), size);
+        static u64 reused = 0;
+        ++reused;
+        if (reused == 1 || reused == 100000 || reused % 1000000 == 0) {
+            LOG_INFO(HW_GPU, "Uniform stream reused {}", reused);
+        }
+        return true;
     }
+    slot.ref = staging_pool.Request(size, MemoryUsage::Upload);
+    std::memcpy(slot.ref.mapped_span.data(), reuse.scratch.data(), size);
+    std::memcpy(slot.bytes.data(), reuse.scratch.data(), size);
+    slot.device_addr = device_addr;
+    slot.size = size;
+    slot.tick = tick;
     guest_descriptor_queue.AddBuffer(slot.ref.buffer, slot.ref.device_address,
                                     static_cast<u32>(slot.ref.offset), size);
     return true;
