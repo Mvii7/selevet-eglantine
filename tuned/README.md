@@ -113,10 +113,12 @@ The loader makes the Switch 2 SDK's `nn::vi::detail::DefaultDisplay::QueryVrrSup
 
 NUP containers load, and a loose dump can be packed from the game list (`Convert to NUP...`) or with `eden-cli --pack-nup <dump> [<out.nup>]`. A compressed member larger than 256 MiB is decompressed to a temporary file instead of being held in memory. A Switch 2 NUP is detected from `main.npdm` inside the container and boots with the 12 GiB layout.
 
+A vertex, index, or storage buffer the guest has not written since its last upload is not scanned again. The first time that happens, and again at 100000, the log says `Clean buffer uploads skipped`.
+
 ## License and AI disclosure
 
 GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.
 
 The changes in this repo were written with Claude (Anthropic), then tested in-game by the repo owner. They have not been reviewed by the Eglantine developers.
 
-The NUP loader and the 30 FPS checkbox were written with Grok 4.7.
+The NUP loader, the 30 FPS checkbox, and the clean buffer upload skip were written with Grok 4.7.
