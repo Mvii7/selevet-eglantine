@@ -11,6 +11,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <memory>
+#include <limits>
 #include <mutex>
 #include <type_traits>
 #include <vector>
@@ -185,6 +186,11 @@ private:
 
     DescriptorBufferLayout descriptor_buffer_layout;
     std::vector<DescriptorUpdateEntry> last_descriptor_payload;
+    // Texture handles from the last draw of this pipeline, and the views built for them.
+    std::vector<u32> kept_view_handles;
+    std::vector<VideoCommon::ImageViewId> kept_view_ids;
+    u64 kept_view_epoch{};
+    size_t kept_view_channel{std::numeric_limits<size_t>::max()};
     VkDeviceSize last_descriptor_buffer_offset{};
     u32 last_descriptor_buffer_chunk{};
     u64 last_descriptor_buffer_generation{};

@@ -370,6 +370,14 @@ GraphicsPipeline::GraphicsPipeline(
     configure_func = ConfigureFunc(*spv_modules, stage_infos);
 }
 
+void NoteTextureViewKept() {
+    static u64 kept_views = 0;
+    ++kept_views;
+    if (kept_views == 1 || kept_views == 100000 || kept_views % 1000000 == 0) {
+        LOG_INFO(HW_GPU, "Texture view kept {}", kept_views);
+    }
+}
+
 void GraphicsPipeline::AddTransition(GraphicsPipeline* transition) {
     transition_keys.push_back(transition->key);
     transitions.push_back(transition);
@@ -483,10 +491,44 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
     }
     ASSERT(views.size() == num_image_elements);
     ASSERT(samplers.size() == num_textures);
-    {
+    bool views_kept = false;
+    if (!views.empty() && views.size() == kept_view_handles.size() &&
+        texture_cache.ImageViewEpoch() == kept_view_epoch &&
+        texture_cache.ChannelId() == kept_view_channel) {
+        bool handles_match = true;
+        for (size_t index = 0; index < views.size(); ++index) {
+            if (views[index].blacklist || views[index].index != kept_view_handles[index]) {
+                handles_match = false;
+                break;
+            }
+        }
+        if (handles_match) {
+            views_kept = true;
+            for (const VideoCommon::ImageViewId id : kept_view_ids) {
+                if (!texture_cache.UseKeptImageView(id)) {
+                    views_kept = false;
+                    break;
+                }
+            }
+        }
+    }
+    if (views_kept) {
+        for (size_t index = 0; index < views.size(); ++index) {
+            views[index].id = kept_view_ids[index];
+        }
+        NoteTextureViewKept();
+    } else {
         Profile::Scope scope{Profile::Zone::FillImageViews};
         texture_cache.FillImageViews(std::span(views.data(), views.size()), false,
                                      Spec::has_images);
+        kept_view_handles.resize(views.size());
+        kept_view_ids.resize(views.size());
+        for (size_t index = 0; index < views.size(); ++index) {
+            kept_view_handles[index] = views[index].index;
+            kept_view_ids[index] = views[index].id;
+        }
+        kept_view_epoch = texture_cache.ImageViewEpoch();
+        kept_view_channel = texture_cache.ChannelId();
     }
 
     VideoCommon::ImageViewInOut* texture_buffer_it{views.data()};

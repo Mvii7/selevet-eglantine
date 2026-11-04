@@ -362,6 +362,26 @@ void TextureCache<P>::MarkModification(ImageId id) noexcept {
 }
 
 template <class P>
+bool TextureCache<P>::UseKeptImageView(ImageViewId id) {
+    if (!id) {
+        return true;
+    }
+    const ImageViewBase& image_view = slot_image_views[id];
+    if (image_view.IsBuffer()) {
+        return true;
+    }
+    Image& image = slot_images[image_view.image_id];
+    constexpr auto blocking = ImageFlagBits::CpuModified | ImageFlagBits::UnwrittenSparse |
+                              ImageFlagBits::IsDecoding | ImageFlagBits::SparseLayers |
+                              ImageFlagBits::SparseTiles;
+    if (True(image.flags & blocking) || !image.aliased_images.empty()) {
+        return false;
+    }
+    lru_cache.Touch(image.lru_index, frame_tick);
+    return true;
+}
+
+template <class P>
 void TextureCache<P>::FillImageViews(std::span<ImageViewInOut> views, bool compute, bool blacklist) {
     bool has_blacklisted = false;
     do {
@@ -2001,6 +2021,9 @@ void TextureCache<P>::InvalidateScale(Image& image) {
     }
     RemoveImageViewReferences(image_view_ids);
     RemoveFramebuffers(image_view_ids);
+    if (!image_view_ids.empty()) {
+        ++image_view_epoch;
+    }
     for (const ImageViewId image_view_id : image_view_ids) {
         sentenced_image_view.Push(std::move(slot_image_views[image_view_id]));
         slot_image_views.erase(image_view_id);
@@ -3407,6 +3430,9 @@ void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
         other_image.CheckBadOverlapState();
         ASSERT_MSG(num_removed_overlaps == 1, "Invalid number of removed overlapps: {}",
                    num_removed_overlaps);
+    }
+    if (!image_view_ids.empty()) {
+        ++image_view_epoch;
     }
     for (const ImageViewId image_view_id : image_view_ids) {
         if (!immediate_delete) {

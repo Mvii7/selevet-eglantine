@@ -140,6 +140,8 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
     u64 astc_alpha_images{};
     std::vector<u8> astc_scan_buffer;
     u64 images_deleted{};
+    // Bumped when an image view slot is freed. Not cleared with the 600-frame stats.
+    u64 image_view_epoch{};
     std::map<u64, std::pair<u32, GPUVAddr>> created_shapes;
 
     static constexpr s64 DEFAULT_EXPECTED_MEMORY = 1_GiB + 125_MiB;
@@ -226,6 +228,20 @@ public:
 
     /// Fill image_view_ids with the graphics/compute images in indices
     void FillImageViews(std::span<ImageViewInOut> views, bool compute, bool blacklist = true);
+
+    /// Image-view slots freed so far. A kept view id from before this value is stale.
+    [[nodiscard]] u64 ImageViewEpoch() const noexcept {
+        return image_view_epoch;
+    }
+
+    /// Channel the kept view ids were resolved on.
+    [[nodiscard]] size_t ChannelId() const noexcept {
+        return current_channel_id;
+    }
+
+    /// The kept view still names this image, and the image does not need a refresh.
+    /// Touches the image so a run of kept draws does not evict it.
+    bool UseKeptImageView(ImageViewId id);
 
     /// Handle feedback loops during draws.
     void CheckFeedbackLoop(std::span<const ImageViewInOut> views);
