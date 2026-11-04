@@ -366,7 +366,7 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
         const bool should_pass_arguments = std::strcmp(module, "rtld") == 0;
         const auto tentative_next_load_addr = AppLoader_NSO::LoadModule(
             process, system, *module_file, code_size, should_pass_arguments, false, {},
-            patch_ctx.GetPatchers(), patch_ctx.GetLastIndex());
+            patch_ctx.GetPatchers(), patch_ctx.GetLastIndex(), metadata.GetTitleID());
         if (!tentative_next_load_addr) {
             return {ResultStatus::ErrorLoadingNSO, {}};
         }
@@ -414,7 +414,7 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
         const bool should_pass_arguments = std::strcmp(module, "rtld") == 0;
         const auto tentative_next_load_addr = AppLoader_NSO::LoadModule(
             process, system, *module_file, load_addr, should_pass_arguments, true, pm,
-            patch_ctx.GetPatchers(), patch_ctx.GetIndex(i));
+            patch_ctx.GetPatchers(), patch_ctx.GetIndex(i), metadata.GetTitleID());
         if (!tentative_next_load_addr) {
             return {ResultStatus::ErrorLoadingNSO, {}};
         }

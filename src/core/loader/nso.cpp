@@ -157,7 +157,7 @@ FileType AppLoader_NSO::IdentifyType(const FileSys::VirtualFile& in_file) {
     return FileType::NSO;
 }
 
-std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::System& system, const FileSys::VfsFile& nso_file, VAddr load_base, bool should_pass_arguments, bool load_into_process, std::optional<FileSys::PatchManager> pm, std::vector<Core::NCE::Patcher>* patches, s32 patch_index) {
+std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::System& system, const FileSys::VfsFile& nso_file, VAddr load_base, bool should_pass_arguments, bool load_into_process, std::optional<FileSys::PatchManager> pm, std::vector<Core::NCE::Patcher>* patches, s32 patch_index, u64 known_program_id) {
     if (nso_file.GetSize() < sizeof(NSOHeader))
         return std::nullopt;
     NSOHeader nso_header{};
@@ -287,35 +287,48 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
         }
     }
     std::optional<u64> frame_step_offset;
+    const u64 program_id = known_program_id != 0 ? known_program_id : process.GetProgramId();
+    if (name == "main" && program_id == Service::Nx2BananzaProgramId && Service::Nx2DecoupleEnabled()) {
+        // The layout pass and the load pass must grow by the same amount. Bananza's data and bss
+        // already fill the last page, so the step float gets a page of its own.
+        const u64 mapped_end = (std::min)(data_off + codeset.DataSegment().size, u64{image_size});
+        const u64 slack = mapped_end > data_off + data_used ? mapped_end - (data_off + data_used) : 0;
+        if (slack < sizeof(float)) {
+            const u32 page = PageAlignSize(1);
+            codeset.memory.resize(codeset.memory.size() + page);
+            codeset.DataSegment().size += page;
+            image_size += page;
+        }
+    }
     if (load_into_process && name == "main") {
         Service::Nx2SetFrameStepAddress(0);
-        if (process.GetProgramId() == Service::Nx2BananzaProgramId && Service::Nx2DecoupleEnabled()) {
+        if (program_id == Service::Nx2BananzaProgramId && Service::Nx2DecoupleEnabled()) {
             const u64 text_off = codeset.CodeSegment().offset;
             const u64 text_end = (std::min)(text_off + codeset.CodeSegment().size,
                                             rodata_off > text_off ? rodata_off : text_off + codeset.CodeSegment().size);
+            const u64 text_slack = text_end > text_off + text_used ? text_end - (text_off + text_used) : 0;
             const u64 data_mapped_end = (std::min)(data_off + codeset.DataSegment().size, u64{image_size});
-            const u64 slack = data_mapped_end > data_off + data_used ? data_mapped_end - (data_off + data_used) : 0;
-            if (slack >= sizeof(float)) {
-                const u64 float_off = (data_mapped_end - sizeof(float)) & ~u64{3};
-                if (float_off >= data_off + data_used) {
-                    const auto step = Service::Nx2PatchBananzaFrameStep(
-                        codeset.memory, text_off, text_used, text_end, float_off, load_base);
-                    if (step.patch) {
-                        frame_step_offset = step.patch->float_offset;
-                        LOG_INFO(Loader,
-                                 "Bananza frame step at {:#x} follows the measured frame, capped at 1/{} s",
-                                 step.patch->site_offset, Service::Nx2DecoupleCapDenominator());
-                    } else {
-                        LOG_WARNING(Loader,
-                                    "Bananza frame step was not patched ({} reciprocal, {} scale, {} divide). "
-                                    "Its speed still follows whole vsyncs.",
-                                    step.vfr, step.scale, step.divide);
-                    }
+            const u64 float_off = (data_mapped_end - sizeof(float)) & ~u64{3};
+            if (text_slack < 12) {
+                LOG_WARNING(Loader,
+                            "Bananza frame step was not patched; its code segment has {} spare bytes",
+                            text_slack);
+            } else if (float_off >= data_off + data_used && float_off + sizeof(float) <= data_mapped_end) {
+                const auto step = Service::Nx2PatchBananzaFrameStep(
+                    codeset.memory, text_off, text_used, text_end, float_off, load_base);
+                if (step.patch) {
+                    frame_step_offset = step.patch->float_offset;
+                    LOG_INFO(Loader,
+                             "Bananza frame step at {:#x} follows the measured frame, capped at 1/{} s",
+                             step.patch->site_offset, Service::Nx2DecoupleCapDenominator());
+                } else {
+                    LOG_WARNING(Loader,
+                                "Bananza frame step was not patched ({} reciprocal, {} scale, {} divide). "
+                                "Its speed still follows whole vsyncs.",
+                                step.vfr, step.scale, step.divide);
                 }
-            } else if (data_used != 0) {
-                LOG_WARNING(Loader, "Bananza frame step was not patched; its data segment has no spare bytes");
             }
-        } else if (process.GetProgramId() == Service::Nx2BananzaProgramId) {
+        } else if (program_id == Service::Nx2BananzaProgramId) {
             LOG_INFO(Loader, "Bananza frame step left unchanged (EDEN_NX2_DECOUPLE=0)");
         }
     }
