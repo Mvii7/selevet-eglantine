@@ -27,6 +27,7 @@
 #include "common/logging.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
+#include "core/core.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/gpu_logging/gpu_logging.h"
 #include "video_core/indirect_draw_reset.h"
@@ -751,8 +752,140 @@ bool SkipShadowPass(const Tegra::Engines::Maxwell3D& maxwell3d) {
 }
 } // Anonymous namespace
 
+// One window of the shaders that issue the most draws, plus two snapshots of their smallest
+// constant buffers. The hilltop vista is ~21,000 draws a frame; the words that change between
+// the two snapshots are the per-object constants.
+struct DrawProbeSlot {
+    u64 vs{};
+    u64 ps{};
+    u32 count{};
+    u32 elements{};
+    u32 samples{};
+    bool indexed{};
+    bool indirect{};
+    u32 cbuf_slot[2]{18, 18};
+    u32 cbuf_size[2]{};
+    std::array<std::array<std::array<u32, 32>, 2>, 2> words{};
+};
+
+std::array<DrawProbeSlot, 8> draw_probe_slots{};
+u64 draw_probe_window{~u64{0}};
+
+void ReadProbeWords(Tegra::MemoryManager& gpu_memory, GPUVAddr address, u32 size,
+                    std::array<u32, 32>& out) {
+    out.fill(0);
+    const u32 bytes = (std::min)(size, 128u);
+    if (bytes < sizeof(u32) || !gpu_memory.IsFullyMappedRange(address, bytes)) {
+        return;
+    }
+    gpu_memory.ReadBlockUnsafe(address, out.data(), bytes);
+}
+
+void ReportDrawProbe() {
+    std::array<DrawProbeSlot, 8> ordered = draw_probe_slots;
+    std::ranges::sort(ordered, [](const DrawProbeSlot& lhs, const DrawProbeSlot& rhs) {
+        return lhs.count > rhs.count;
+    });
+    for (const DrawProbeSlot& slot : ordered) {
+        if (slot.count == 0) {
+            break;
+        }
+        LOG_INFO(HW_GPU,
+                 "Draw probe: vs={:#x} ps={:#x} draws={} elements={} indexed={} indirect={} "
+                 "cbuf{}={} cbuf{}={}",
+                 slot.vs, slot.ps, slot.count, slot.elements, slot.indexed, slot.indirect,
+                 slot.cbuf_slot[0], slot.cbuf_size[0], slot.cbuf_slot[1], slot.cbuf_size[1]);
+        for (u32 sample = 0; sample < slot.samples; ++sample) {
+            for (u32 which = 0; which < 2; ++which) {
+                if (slot.cbuf_slot[which] >= 18) {
+                    continue;
+                }
+                LOG_INFO(HW_GPU, "Draw probe sample {} cbuf{}: {:08x}", sample, slot.cbuf_slot[which],
+                         fmt::join(slot.words[sample][which], " "));
+            }
+        }
+    }
+}
+
+void NoteDrawProbe(Tegra::MemoryManager& gpu_memory, Tegra::Engines::Maxwell3D& maxwell3d,
+                   bool indirect) {
+    const u64 present = Core::g_nx2_present_count.load(std::memory_order_relaxed);
+    const u64 window = present / 600;
+    if (window != draw_probe_window) {
+        if (draw_probe_window != ~u64{0}) {
+            ReportDrawProbe();
+        }
+        draw_probe_slots = {};
+        draw_probe_window = window;
+    }
+    const auto& regs = maxwell3d.regs;
+    const u64 vs = (u64{regs.pipelines[1].reserved[0] & 0xff} << 32) | regs.pipelines[1].reserved[1];
+    const u64 ps = (u64{regs.pipelines[5].reserved[0] & 0xff} << 32) | regs.pipelines[5].reserved[1];
+    DrawProbeSlot* slot = nullptr;
+    DrawProbeSlot* lowest = &draw_probe_slots[0];
+    for (DrawProbeSlot& candidate : draw_probe_slots) {
+        if (candidate.count != 0 && candidate.vs == vs && candidate.ps == ps) {
+            slot = &candidate;
+            break;
+        }
+        if (candidate.count < lowest->count) {
+            lowest = &candidate;
+        }
+    }
+    if (slot == nullptr) {
+        slot = lowest;
+        *slot = {};
+        slot->vs = vs;
+        slot->ps = ps;
+    }
+    ++slot->count;
+    if (slot->samples >= 2 || (slot->count != 1 && slot->count != 8192)) {
+        return;
+    }
+    const auto& draw = maxwell3d.draw_manager.draw_state;
+    const bool indexed = draw.draw_indexed;
+    slot->indexed = indexed;
+    slot->indirect = indirect;
+    slot->elements = indexed ? draw.index_buffer.count : draw.vertex_buffer.count;
+    const auto& stage = maxwell3d.state.shader_stages[0];
+    if (slot->samples == 0) {
+        u32 sizes[2]{~u32{0}, ~u32{0}};
+        for (u32 index = 0; index < Tegra::Engines::Maxwell3D::Regs::MaxConstBuffers; ++index) {
+            const auto& buffer = stage.const_buffers[index];
+            if (!buffer.enabled || buffer.size == 0 || buffer.size >= sizes[1]) {
+                continue;
+            }
+            if (buffer.size < sizes[0]) {
+                sizes[1] = sizes[0];
+                slot->cbuf_slot[1] = slot->cbuf_slot[0];
+                slot->cbuf_size[1] = slot->cbuf_size[0];
+                sizes[0] = buffer.size;
+                slot->cbuf_slot[0] = index;
+                slot->cbuf_size[0] = buffer.size;
+            } else {
+                sizes[1] = buffer.size;
+                slot->cbuf_slot[1] = index;
+                slot->cbuf_size[1] = buffer.size;
+            }
+        }
+    }
+    for (u32 which = 0; which < 2; ++which) {
+        const u32 index = slot->cbuf_slot[which];
+        if (index >= Tegra::Engines::Maxwell3D::Regs::MaxConstBuffers) {
+            continue;
+        }
+        const auto& buffer = stage.const_buffers[index];
+        if (!buffer.enabled || buffer.size == 0) {
+            continue;
+        }
+        ReadProbeWords(gpu_memory, buffer.address, buffer.size, slot->words[slot->samples][which]);
+    }
+    ++slot->samples;
+}
+
 void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
     Tegra::g_nx2_draw_count.fetch_add(1, std::memory_order_relaxed);
+    NoteDrawProbe(*gpu_memory, *maxwell3d, false);
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::Draw};
     TraceWindowTarget(*maxwell3d, *gpu_memory, is_indexed ? "draw-indexed" : "draw",
                       is_indexed ? maxwell3d->draw_manager.draw_state.index_buffer.count
@@ -901,6 +1034,7 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
 
 void RasterizerVulkan::DrawIndirect() {
     Tegra::g_nx2_draw_count.fetch_add(1, std::memory_order_relaxed);
+    NoteDrawProbe(*gpu_memory, *maxwell3d, true);
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::Draw};
     const auto& params = maxwell3d->draw_manager.indirect_state;
     if (SkipShadowPass(*maxwell3d)) {

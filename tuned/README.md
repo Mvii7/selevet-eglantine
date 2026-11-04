@@ -124,7 +124,7 @@ The command-entry batch keeps the entries that are still being read, up to 16384
 
 A vertex, index, or storage buffer the guest has not written since its last upload is not scanned again. The first time that happens, and again at 100000, the log says `Clean buffer uploads skipped`.
 
-Each 600-present line also says how many graphics draws the GPU thread entered in that window, and the same count per second.
+Each 600-present line also says how many graphics draws the GPU thread entered in that window, and the same count per second. At the end of that window the log names the shaders that issued the most draws and two snapshots of their smallest constant buffers (`Draw probe`).
 
 ## License and AI disclosure
 
@@ -132,4 +132,4 @@ GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.
 
 The changes in this repo were written with Claude (Anthropic), then tested in-game by the repo owner. They have not been reviewed by the Eglantine developers.
 
-The NUP loader, the 30 FPS checkbox, the clean buffer upload skip, and the draw count on the present line were written with Grok 4.7.
+The NUP loader, the 30 FPS checkbox, the clean buffer upload skip, the draw count on the present line, and the draw-probe snapshots were written with Grok 4.7.
