@@ -515,4 +515,16 @@ private:
     std::atomic<size_t> count{};
 };
 
+// Bumped when guest memory or a buffer binding changed, so the next draw rebuilds its setup.
+// EDEN_NX2_DRAW_REUSE=0 skips that check and builds the setup every time.
+inline std::atomic<u64> g_nx2_draw_memory_stamp{0};
+
+inline void Nx2BumpDrawMemory() {
+    g_nx2_draw_memory_stamp.fetch_add(1, std::memory_order_relaxed);
+}
+
+[[nodiscard]] inline u64 Nx2DrawMemoryStamp() {
+    return g_nx2_draw_memory_stamp.load(std::memory_order_relaxed);
+}
+
 } // namespace Tegra

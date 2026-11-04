@@ -246,6 +246,112 @@ RasterizerVulkan::~RasterizerVulkan() {
     scheduler.Finish();
 }
 
+namespace {
+
+struct DrawSetupCache {
+    bool valid = false;
+    const void* pipeline = nullptr;
+    const void* maxwell3d = nullptr;
+    u64 epoch = 0;
+    u64 memory_stamp = 0;
+    GPUVAddr tex_header = 0;
+    u32 tex_header_limit = 0;
+    GPUVAddr tex_sampler = 0;
+    u32 tex_sampler_limit = 0;
+    u32 sampler_binding = 0;
+    GPUVAddr index_addr = 0;
+    GPUVAddr index_end = 0;
+    u32 index_format = 0;
+    bool is_indexed = false;
+    Tegra::Engines::Maxwell3D::DirtyState::Flags flags{};
+};
+
+DrawSetupCache& CachedDrawSetup() {
+    static DrawSetupCache cache;
+    return cache;
+}
+
+bool DrawReuseEnabled() {
+    static const bool enabled = [] {
+        const char* const value = std::getenv("EDEN_NX2_DRAW_REUSE");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled;
+}
+
+void ForgetDrawSetup() {
+    CachedDrawSetup().valid = false;
+}
+
+// Index count and first index set the index-buffer flag on every indexed draw. The buffer
+// address is compared on its own, and the draw call uses the new count.
+bool DrawSetupMatches(const GraphicsPipeline* pipeline, Tegra::Engines::Maxwell3D* maxwell3d,
+                      bool is_indexed, u64 epoch) {
+    const DrawSetupCache& cache = CachedDrawSetup();
+    if (!cache.valid || cache.pipeline != pipeline || cache.maxwell3d != maxwell3d ||
+        cache.is_indexed != is_indexed || cache.epoch != epoch ||
+        cache.memory_stamp != Tegra::Nx2DrawMemoryStamp()) {
+        return false;
+    }
+    const auto& regs = maxwell3d->regs;
+    const auto& index = regs.index_buffer;
+    if (regs.tex_header.Address() != cache.tex_header || regs.tex_header.limit != cache.tex_header_limit ||
+        regs.tex_sampler.Address() != cache.tex_sampler ||
+        regs.tex_sampler.limit != cache.tex_sampler_limit ||
+        static_cast<u32>(regs.sampler_binding) != cache.sampler_binding ||
+        index.StartAddress() != cache.index_addr || index.EndAddress() != cache.index_end ||
+        static_cast<u32>(index.format) != cache.index_format) {
+        return false;
+    }
+    const auto& flags = maxwell3d->dirty.flags;
+    if (flags == cache.flags) {
+        return true;
+    }
+    const auto topology = maxwell3d->draw_manager.draw_state.topology;
+    if (topology == Maxwell::PrimitiveTopology::Quads ||
+        topology == Maxwell::PrimitiveTopology::QuadStrip ||
+        index.format == Maxwell::IndexFormat::UnsignedByte) {
+        return false;
+    }
+    auto current = flags;
+    auto saved = cache.flags;
+    current[VideoCommon::Dirty::IndexBuffer] = false;
+    saved[VideoCommon::Dirty::IndexBuffer] = false;
+    return current == saved;
+}
+
+void StoreDrawSetup(const GraphicsPipeline* pipeline, Tegra::Engines::Maxwell3D* maxwell3d,
+                    bool is_indexed, u64 epoch) {
+    DrawSetupCache& cache = CachedDrawSetup();
+    const auto& regs = maxwell3d->regs;
+    const auto& index = regs.index_buffer;
+    cache.valid = true;
+    cache.pipeline = pipeline;
+    cache.maxwell3d = maxwell3d;
+    cache.epoch = epoch;
+    cache.memory_stamp = Tegra::Nx2DrawMemoryStamp();
+    cache.tex_header = regs.tex_header.Address();
+    cache.tex_header_limit = regs.tex_header.limit;
+    cache.tex_sampler = regs.tex_sampler.Address();
+    cache.tex_sampler_limit = regs.tex_sampler.limit;
+    cache.sampler_binding = static_cast<u32>(regs.sampler_binding);
+    cache.index_addr = index.StartAddress();
+    cache.index_end = index.EndAddress();
+    cache.index_format = static_cast<u32>(index.format);
+    cache.is_indexed = is_indexed;
+    cache.flags = maxwell3d->dirty.flags;
+}
+
+void NoteDrawReuse() {
+    static u64 reused = 0;
+    ++reused;
+    if (reused == 1 || reused == 100000 || reused % 1000000 == 0) {
+        LOG_INFO(HW_GPU, "Draw setup reused {}", reused);
+    }
+}
+
+} // namespace
+
 template <typename Func>
 void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
 
@@ -554,16 +660,35 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
         submitted = true;
         return;
     }
-    // update engine as channel may be different.
-    pipeline->SetEngine(maxwell3d, gpu_memory);
-    if (Profile::Scope scope{Profile::Zone::Configure}; !pipeline->Configure(is_indexed)) {
-        report_failure("configure failed");
-        return;
+    const bool allow_reuse = DrawReuseEnabled() && maxwell3d->regs.transform_feedback_enabled == 0 &&
+                             !buffer_cache.HasDrawIndirect() &&
+                             maxwell3d->draw_manager.draw_state.inline_index_draw_indexes.empty();
+    const bool reused_setup =
+        allow_reuse && DrawSetupMatches(pipeline, maxwell3d, is_indexed, scheduler.RecordingEpoch());
+    if (reused_setup) {
+        NoteDrawReuse();
+    } else {
+        // update engine as channel may be different.
+        pipeline->SetEngine(maxwell3d, gpu_memory);
+        if (Profile::Scope scope{Profile::Zone::Configure}; !pipeline->Configure(is_indexed)) {
+            ForgetDrawSetup();
+            report_failure("configure failed");
+            return;
+        }
     }
 
     {
         Profile::Scope scope{Profile::Zone::DynamicState};
         UpdateDynamicStates();
+    }
+    // Saved flags are whatever the full setup left behind. A later draw that only changed its
+    // index count still matches those, so a reused draw does not overwrite them.
+    if (!reused_setup) {
+        if (allow_reuse) {
+            StoreDrawSetup(pipeline, maxwell3d, is_indexed, scheduler.RecordingEpoch());
+        } else {
+            ForgetDrawSetup();
+        }
     }
 
     query_cache.NotifySegment(true);
