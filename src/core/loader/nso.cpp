@@ -176,9 +176,10 @@ bool PatchBananzaFrameRate(std::span<u8> image) {
                                     0x54000049, 0x52800793, 0x2a1303e1, 0x17ffffe0};
     static_assert(sizeof(Cave) == 0x2049d4 - 0x2049b0);
     std::memcpy(image.data() + 0x2049b0, Cave, sizeof(Cave));
-    // scvtf of the stored rate became the fill length. Replace it with float 60, so the fill is 1/60.
+    // scvtf of the stored rate became the fill length. The bits of float 60 replace it, so the
+    // fill is 1/60. An integer 60 in that register is a denormal and the fill never ends.
     put(0x204328, 0x140001ab); // b 0x2049d4
-    put(0x2049d4, 0x52800791); // mov w17, #60
+    put(0x2049d4, 0x52a84e11); // mov w17, #0x42700000
     put(0x2049d8, 0x1e270220); // fmov s0, w17
     put(0x2049dc, 0x17fffe54); // b 0x20432c
     for (u32 offset = 0x2049e0; offset < 0x2049fc; offset += 4) {
