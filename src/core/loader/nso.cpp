@@ -330,7 +330,7 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
                 }
             }
         } else if (program_id == Service::Nx2BananzaProgramId) {
-            LOG_INFO(Loader, "Bananza frame step left unchanged (EDEN_NX2_DECOUPLE=0)");
+            LOG_INFO(Loader, "Bananza frame step left unchanged");
         }
     }
 

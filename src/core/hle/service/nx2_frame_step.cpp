@@ -511,7 +511,7 @@ Nx2FrameStepScan Nx2PatchBananzaFrameStep(std::span<u8> image, u64 text_off, u64
 
 bool Nx2DecoupleEnabled() {
     const char* value = std::getenv("EDEN_NX2_DECOUPLE");
-    return value == nullptr || value[0] != '0';
+    return value != nullptr && value[0] == '1';
 }
 
 int Nx2DecoupleCapDenominator() {

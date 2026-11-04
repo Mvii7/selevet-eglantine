@@ -91,7 +91,7 @@ Graphics settings has **Limit speed to 30 FPS**. It stops presents faster than 3
 
 ## Speed when a frame misses 60
 
-Bananza presents are capped at 60 Hz. A finished frame is not held to a slower rate the game wrote into the present. The simulation step is rewritten to the time that frame actually took, so 40 fps and 20 fps stay at full speed. One step is never longer than 1/20 s. A change that lasts two frames is taken whole; a single hitch only eases the step a tenth of the way, and the time that hitch did not step is not added to the next frame. `EDEN_NX2_DECOUPLE_DT_CAP=N` sets that cap to 1/N seconds, with N from 10 to 60 and `0` meaning 1/10. `EDEN_NX2_DECOUPLE=0` leaves the game's own step. The loader log says whether the rewrite matched.
+Presents follow build 31 at 100%: one 60 Hz tick, and a late frame is shown immediately without paying that time back. When the game asks for two or three ticks, the present waits that long, so that longer step cannot play out in a single tick. `EDEN_NX2_DECOUPLE=1` is the experimental step rewrite and is off unless set.
 
 ## Build 104 merge
 

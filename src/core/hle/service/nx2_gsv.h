@@ -1564,9 +1564,8 @@ private:
     u32 m_previous_fence_value{};
 
     // The console flips one frame per vblank and keeps the rest queued. Present word 12 is
-    // (swap interval << 16) | refresh. A game that asks for two vblanks runs at double speed if
-    // every present returns after one. Bananza is the exception: that word is its dynamic rate,
-    // and waiting out a slower request holds it there after the frame was already finished.
+    // (swap interval << 16) | refresh. One tick is the usual pace. Two or three ticks are waited
+    // out, because returning after one plays that longer step at double or triple speed.
     // A missed slot is not repaid with another immediate present.
     Nx2PresentPacer m_present_pacer;
     std::chrono::steady_clock::time_point m_next_vblank{};
@@ -1594,12 +1593,12 @@ private:
         const u32 requested_interval = std::clamp<u32>(timing >> 16, 1u, 4u);
         const u32 requested_refresh =
             (timing & 0xffff) >= 30 && (timing & 0xffff) <= 240 ? timing & 0xffff : 60;
-        const bool bananza = system.GetApplicationProcessProgramID() == Nx2BananzaProgramId;
-        u32 swap_interval = bananza ? 1u : requested_interval;
-        u32 refresh_rate = bananza ? 60u : requested_refresh;
+        // Build 31 paces one 60 Hz tick. Returning on that tick while the game asked for two or
+        // three is the speed-up: the longer step plays out in one tick. Wait those ticks out.
+        u32 swap_interval = requested_interval >= 2 ? requested_interval : 1u;
+        u32 refresh_rate = 60;
         if (cap_30) {
             swap_interval = (std::max)(swap_interval, 2u);
-            refresh_rate = 60;
         }
         if (swap_interval != m_paced_interval || refresh_rate != m_paced_refresh ||
             requested_interval != m_requested_interval || requested_refresh != m_requested_refresh) {
