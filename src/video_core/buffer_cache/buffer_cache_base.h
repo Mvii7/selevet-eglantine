@@ -545,6 +545,14 @@ private:
     u32 enabled_vertex_buffers_mask = 0;
     u64 vertex_buffers_serial = 0;
     std::array<Binding, 32> v_buffer{};
+    // A resolved vertex stream. A later draw inside it keeps the same host buffer.
+    struct VertexRangeMemory {
+        GPUVAddr gpu_begin{};
+        u64 gpu_bytes{};
+        DAddr device_begin{};
+        BufferId buffer_id{};
+    };
+    std::array<VertexRangeMemory, NUM_VERTEX_BUFFERS> vertex_range_memory{};
 
     boost::container::small_vector<BufferCopy, 4> upload_copies;
 

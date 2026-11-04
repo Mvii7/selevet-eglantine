@@ -162,6 +162,9 @@ void BufferCache<P>::TickFrame() {
 
 template <class P>
 void BufferCache<P>::UnmapGPUMemory(size_t as_id, GPUVAddr gpu_addr, size_t size) {
+    for (auto& cached : vertex_range_memory) {
+        cached.buffer_id = NULL_BUFFER_ID;
+    }
     if constexpr (requires { runtime.BindMultiRangeStorageBuffer(u64{}, bool{}); }) {
         virtual_ranges.Unmap(as_id, gpu_addr, size);
     }
@@ -1520,10 +1523,44 @@ void BufferCache<P>::UpdateVertexBuffer(u32 index) {
     const std::optional<DAddr> device_addr = gpu_memory->GpuToCpuAddress(gpu_addr_begin);
     const u32 address_size = static_cast<u32>(gpu_addr_end - gpu_addr_begin);
     u32 size = address_size; // TODO: Analyze stride and number of vertices
+    VertexRangeMemory& cached = vertex_range_memory[index];
     if (array.enable == 0 || size == 0 || !device_addr) {
+        cached.buffer_id = NULL_BUFFER_ID;
         channel_state->vertex_buffers[index] = NULL_BINDING;
         UpdateVertexBufferSlot(index, NULL_BINDING);
         return;
+    }
+    // Consecutive rocks sit in one stream. The address register changes, so the dirty flag
+    // stays set, but the host buffer is the one already resolved for this range.
+    static const bool reuse_range = [] {
+        const char* value = std::getenv("EDEN_NX2_VRANGE");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (reuse_range && cached.buffer_id != NULL_BUFFER_ID && cached.gpu_bytes >= size &&
+        gpu_addr_begin >= cached.gpu_begin &&
+        gpu_addr_begin - cached.gpu_begin <= cached.gpu_bytes - size) {
+        const DAddr reused_device =
+            cached.device_begin + static_cast<DAddr>(gpu_addr_begin - cached.gpu_begin);
+        const u64 page = reused_device >> CACHING_PAGEBITS;
+        if (*device_addr == reused_device && page < page_table.size() &&
+            page_table[page] == cached.buffer_id) {
+            Buffer& buffer = slot_buffers[cached.buffer_id];
+            if (buffer.IsInBounds(reused_device, size)) {
+                const Binding binding{
+                    .device_addr = reused_device,
+                    .size = size,
+                    .buffer_id = cached.buffer_id,
+                };
+                channel_state->vertex_buffers[index] = binding;
+                UpdateVertexBufferSlot(index, binding);
+                static u64 reused = 0;
+                ++reused;
+                if (reused == 1 || reused == 100000 || reused % 1000000 == 0) {
+                    LOG_INFO(HW_GPU, "Vertex range reused {}", reused);
+                }
+                return;
+            }
+        }
     }
     if (!gpu_memory->IsWithinGPUAddressRange(gpu_addr_end) || size >= 64_MiB) {
         size = static_cast<u32>(gpu_memory->MaxContinuousRange(gpu_addr_begin, size));
@@ -1536,6 +1573,10 @@ void BufferCache<P>::UpdateVertexBuffer(u32 index) {
     };
     channel_state->vertex_buffers[index] = binding;
     UpdateVertexBufferSlot(index, binding);
+    cached.gpu_begin = gpu_addr_begin;
+    cached.gpu_bytes = size;
+    cached.device_begin = *device_addr;
+    cached.buffer_id = buffer_id;
 }
 
 template <class P>
@@ -2351,6 +2392,11 @@ void BufferCache<P>::DeleteBuffer(BufferId buffer_id, bool do_not_mark) {
 #endif
         delayed_destruction_ring.Push(std::move(slot_buffers[buffer_id]));
 
+    for (auto& cached : vertex_range_memory) {
+        if (cached.buffer_id == buffer_id) {
+            cached.buffer_id = NULL_BUFFER_ID;
+        }
+    }
     slot_buffers.erase(buffer_id);
 
     if constexpr (HAS_PERSISTENT_UNIFORM_BUFFER_BINDINGS) {
