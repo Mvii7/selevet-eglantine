@@ -482,6 +482,15 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     const bool is_qualcomm = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY;
     const bool is_turnip = driver_id == VK_DRIVER_ID_MESA_TURNIP;
 
+    // The flag is already consulted when the pipeline workers start. Nothing else was setting it,
+    // so AMD's Windows driver still compiled pipelines on several threads and crashed.
+#ifdef _WIN32
+    has_broken_parallel_compiling = driver_id == VK_DRIVER_ID_AMD_PROPRIETARY;
+#endif
+    if (has_broken_parallel_compiling) {
+        LOG_WARNING(Render_Vulkan, "AMD proprietary driver: compiling pipelines one at a time");
+    }
+
     if (!is_suitable)
         LOG_WARNING(Render_Vulkan, "Unsuitable driver - continuing anyways");
 

@@ -1359,6 +1359,17 @@ void RasterizerVulkan::FlushAndInvalidateRegion(DAddr addr, u64 size,
     InvalidateRegion(addr, size, which);
 }
 
+// A wait that ends at TOP_OF_PIPE does not make the write visible to the next draw. AMD's Windows
+// driver needs the memory barrier; NVIDIA happens to see the data without it.
+bool AmdWindowsMemoryBarrier(const Device& device) {
+#ifdef _WIN32
+    return device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY;
+#else
+    (void)device;
+    return false;
+#endif
+}
+
 void RasterizerVulkan::WaitForIdle() {
     // Everything but wait pixel operations. This intentionally includes FRAGMENT_SHADER_BIT because
     // fragment shaders can still write storage buffers.
@@ -1374,12 +1385,29 @@ void RasterizerVulkan::WaitForIdle() {
 
     query_cache.NotifyWFI();
 
+    const bool memory_barrier = AmdWindowsMemoryBarrier(device);
     scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([event = *wfi_event, flags](vk::CommandBuffer cmdbuf) {
+    scheduler.Record([event = *wfi_event, flags, memory_barrier](vk::CommandBuffer cmdbuf) {
         cmdbuf.SetEvent(event, flags);
-        cmdbuf.WaitEvents(event, flags, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, {}, {}, {});
+        if (memory_barrier) {
+            static constexpr VkMemoryBarrier barrier{
+                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+            };
+            cmdbuf.WaitEvents(event, flags, flags, barrier, {}, {});
+        } else {
+            cmdbuf.WaitEvents(event, flags, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, {}, {}, {});
+        }
     });
     fence_manager.SignalOrdering();
+}
+
+void RasterizerVulkan::Nx2Membar() {
+    if (AmdWindowsMemoryBarrier(device)) {
+        WaitForIdle();
+    }
 }
 
 void RasterizerVulkan::FragmentBarrier() {

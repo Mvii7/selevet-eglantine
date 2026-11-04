@@ -360,6 +360,10 @@ IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Blo
             if (!normalized_host_info.support_geometry_shader_passthrough) {
                 program.output_vertices = GetOutputTopologyVertices(program.output_topology);
                 LowerGeometryPassthrough(program, normalized_host_info);
+                // AMD has no NV passthrough. Leaving the flag set keeps the SPIR-V marked as
+                // passthrough after the shader was already lowered to a real geometry shader.
+                program.info.passthrough.mask.reset();
+                program.is_geometry_passthrough = false;
             }
         }
         break;

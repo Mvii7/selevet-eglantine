@@ -529,8 +529,19 @@ void Puller::CallPullerMethod(DmaPusher& dma_pusher, const MethodCall& method_ca
         break;
     }
     case BufferMethods::MemOpC:
+        LOG_TRACE(HW_GPU, "Memory Operation C");
+        break;
     case BufferMethods::MemOpD: {
-        LOG_TRACE(HW_GPU, "Memory Operation C,D");
+        LOG_TRACE(HW_GPU, "Memory Operation D");
+        // Operation 5 is MEMBAR: later draws must observe GPU-written vertex, index and
+        // indirect buffers. AMD's Windows driver does not, unless the wait has a memory barrier.
+        constexpr u32 OperationShift = 27;
+        constexpr u32 OperationMask = 0x1f;
+        constexpr u32 MembarOperation = 5;
+        if (g_nx2_ampere &&
+            ((method_call.argument >> OperationShift) & OperationMask) == MembarOperation) {
+            OnBack([rasterizer = dma_pusher.rasterizer] { rasterizer->Nx2Membar(); });
+        }
         break;
     }
     case BufferMethods::SemaphoreAcquire: {

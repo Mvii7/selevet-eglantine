@@ -154,6 +154,9 @@ public:
     /// Notify the host renderer to wait for previous primitive and compute operations.
     virtual void WaitForIdle() = 0;
 
+    /// NX2 MEM_OP_D operation 5. AMD's Windows driver needs a real memory barrier here.
+    virtual void Nx2Membar() {}
+
     /// Notify the host renderer to wait for reads and writes to render targets and flush caches.
     virtual void FragmentBarrier() = 0;
 
