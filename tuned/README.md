@@ -115,10 +115,14 @@ NUP containers load, and a loose dump can be packed from the game list (`Convert
 
 A vertex, index, or storage buffer the guest has not written since its last upload is not scanned again. The first time that happens, and again at 100000, the log says `Clean buffer uploads skipped`.
 
+## Bananza far clip
+
+`EDEN_NX2_FAR_SCALE` in `nx2_switches.txt` (a fraction from 0.25 to 1) multiplies the camera far on Donkey Kong Bananza build `e25c90c1c136638885659fd55bf8a03b3403489d`. Unset, it does nothing. The loader scales the three places that load a fresh far and store it on the camera at offset `0x1cc`. A visibility test drops a point past that far. A later refresh that reloads the stored far is not scaled again. This does not touch the shared radius setter, which is what removed the ground texture under DK. The log line is `Bananza camera far multiplied by 0.5`. Check in game that the ground under DK stays and that `Indirect draw reset` reports a shorter list.
+
 ## License and AI disclosure
 
 GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.
 
 The changes in this repo were written with Claude (Anthropic), then tested in-game by the repo owner. They have not been reviewed by the Eglantine developers.
 
-The NUP loader, the 30 FPS checkbox, and the clean buffer upload skip were written with Grok 4.7.
+The NUP loader, the 30 FPS checkbox, the clean buffer upload skip, and the Bananza camera far scale were written with Grok 4.7.
