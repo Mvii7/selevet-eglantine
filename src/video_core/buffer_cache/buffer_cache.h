@@ -960,9 +960,28 @@ void BufferCache<P>::BindHostVertexBuffers() {
         while (enabled_mask != 0) {
             const u32 index = std::countr_zero(enabled_mask);
             enabled_mask &= (enabled_mask - 1);
+            // Already bound. Skip the lookup and the LRU touch unless the guest wrote the
+            // range, or this buffer has not been kept alive yet this frame.
+            if (!flags[Dirty::VertexBuffer0 + index]) {
+                const Binding& bound = VertexBufferSlot(index);
+                if (!memory_tracker.HasPendingCpuUpload(bound.device_addr, bound.size)) {
+                    if (vertex_bind_tick[index] != frame_tick && bound.buffer_id != NULL_BUFFER_ID) {
+                        TouchBuffer(slot_buffers[bound.buffer_id], bound.buffer_id);
+                        vertex_bind_tick[index] = frame_tick;
+                    }
+                    static u64 skipped_binds = 0;
+                    ++skipped_binds;
+                    if (skipped_binds == 1 || skipped_binds == 100000 || skipped_binds % 1000000 == 0) {
+                        LOG_INFO(HW_GPU, "Already bound vertex buffer skipped {}", skipped_binds);
+                    }
+                    flush_bindings();
+                    continue;
+                }
+            }
             const Binding& binding = VertexBufferSlot(index);
             Buffer& buffer = slot_buffers[binding.buffer_id];
             TouchBuffer(buffer, binding.buffer_id);
+            vertex_bind_tick[index] = frame_tick;
             SynchronizeBuffer(buffer, binding.device_addr, binding.size);
             if (!flags[Dirty::VertexBuffer0 + index]) {
                 flush_bindings();
