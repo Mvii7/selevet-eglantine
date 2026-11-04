@@ -122,7 +122,7 @@ Donkey Kong Bananza's hilltop layer is a larger terrain than the earlier worlds.
 
 The command-entry batch keeps the entries that are still being read, up to 16384, instead of the first 1024 from earlier areas.
 
-A vertex, index, or storage buffer the guest has not written since its last upload is not scanned again. The first time that happens, and again at 100000, the log says `Clean buffer uploads skipped`.
+A vertex, index, or storage buffer the guest has not written since its last upload is not scanned again. The first time that happens, and again at 100000, the log says `Clean buffer uploads skipped`. A 4 MiB page that is dirty somewhere else still skips the scan when the buffer's own words are clean. That log says `Clean range in a dirty page skipped`. `EDEN_NX2_RANGE_SKIP=0` restores the scan.
 
 Each 600-present line also says how many graphics draws the GPU thread entered in that window, and the same count per second. At the end of that window the log names the shaders that issued the most draws and two snapshots of their smallest constant buffers (`Draw probe`).
 

@@ -1897,6 +1897,20 @@ bool BufferCache<P>::SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 si
         }
         return true;
     }
+    // A 4 MiB page stays dirty when any other word in it was written. The mesh's own words
+    // are clean after the first upload, and walking them again is the same scan.
+    static const bool range_skip = [] {
+        const char* value = std::getenv("EDEN_NX2_RANGE_SKIP");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (range_skip && !memory_tracker.RangeHasPendingCpuUpload(device_addr, size)) {
+        static u64 range_skips = 0;
+        ++range_skips;
+        if (range_skips == 1 || range_skips == 100000 || range_skips % 1000000 == 0) {
+            LOG_INFO(HW_GPU, "Clean range in a dirty page skipped {}", range_skips);
+        }
+        return true;
+    }
 #ifdef __ANDROID__
     const bool use_optimized_vertex_buffers = Settings::values.use_optimized_vertex_buffers.GetValue();
 #else
