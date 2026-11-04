@@ -495,18 +495,8 @@ bool DmaPusher::Step() {
         // (the split only starts with unsafe reads; the settings can change mid-game).
         const bool use_safe = !VideoCommon::GpuSplit::Get().Active() &&
                               (Settings::IsDMALevelDefault() ? Settings::IsGPULevelHigh() : Settings::IsDMALevelSafe());
-        const auto silence_capped_mesh = [&](CommandHeader* words, size_t word_count) {
-            // The cull pass rewrites the 5-word record after the reset. Zero it in the words
-            // about to be parsed, and in guest memory for a later read of the same record.
-            if (word_count != 5 || !Nx2MeshCapDropped(dma_state.dma_get)) {
-                return;
-            }
-            std::fill_n(reinterpret_cast<u32*>(words), 5, 0u);
-            memory_manager.WriteBlockUnsafe(dma_state.dma_get, words, 5 * sizeof(u32));
-        };
         if (use_safe) {
             Tegra::Memory::GpuGuestMemory<Tegra::CommandHeader, Tegra::Memory::GuestMemoryFlags::SafeRead>headers(memory_manager, dma_state.dma_get, header.size, &command_headers);
-            silence_capped_mesh(headers.data(), headers.size());
             const std::span<const CommandHeader> commands{headers.data(), headers.size()};
             RecordParsedEntry(header, commands);
             command_resume_offset +=
@@ -514,7 +504,6 @@ bool DmaPusher::Step() {
         } else {
             FlushGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
             Tegra::Memory::GpuGuestMemory<Tegra::CommandHeader, Tegra::Memory::GuestMemoryFlags::UnsafeRead>headers(memory_manager, dma_state.dma_get, header.size, &command_headers);
-            silence_capped_mesh(headers.data(), headers.size());
             const std::span<const CommandHeader> commands{headers.data(), headers.size()};
             RecordParsedEntry(header, commands);
             command_resume_offset +=
