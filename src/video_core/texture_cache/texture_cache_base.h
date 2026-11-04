@@ -94,13 +94,6 @@ public:
     ::Common::unordered_map<u32, SamplerId> sampler_ids;
     ::Common::unordered_map<u32, ImageViewId> image_view_ids;
 
-    // Hot path for the hilltop: the same texture and sampler indices, every rock. A flat slot
-    // avoids hashing the index. Invalid means not filled yet. Indices past the cap stay on the map.
-    std::vector<ImageViewId> graphics_image_view_flat;
-    std::vector<SamplerId> graphics_sampler_flat;
-    std::vector<ImageViewId> compute_image_view_flat;
-    std::vector<SamplerId> compute_sampler_flat;
-
     TextureCacheGPUMap* gpu_page_table = nullptr;
     TextureCacheGPUMap* sparse_page_table = nullptr;
 };

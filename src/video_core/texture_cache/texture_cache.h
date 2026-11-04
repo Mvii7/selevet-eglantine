@@ -479,32 +479,13 @@ SamplerId TextureCache<P>::GetSamplerId(u32 index, bool compute) {
         return NULL_SAMPLER_ID;
     }
     auto const map_index = index | (compute ? Common::SlotId::TAGGED_VALUE : 0);
-    auto& flat = compute ? channel_state->compute_sampler_flat : channel_state->graphics_sampler_flat;
-    constexpr u32 FlatCap = 8192;
     auto const [descriptor, is_new] = table.Read(*gpu_memory, index);
     if (is_new) {
         auto const id = FindSampler(descriptor, compute);
         channel_state->sampler_ids.insert_or_assign(map_index, id);
-        if (index < FlatCap) {
-            if (flat.size() <= index) {
-                flat.resize(index + 1);
-            }
-            flat[index] = id;
-        }
         return id;
     }
-    if (index < FlatCap && index < flat.size() &&
-        flat[index].index != Common::SlotId::INVALID_INDEX) {
-        return flat[index];
-    }
-    const SamplerId id = channel_state->sampler_ids.find(map_index)->second;
-    if (index < FlatCap) {
-        if (flat.size() <= index) {
-            flat.resize(index + 1);
-        }
-        flat[index] = id;
-    }
-    return id;
+    return channel_state->sampler_ids.find(map_index)->second;
 }
 
 template <class P>
@@ -728,48 +709,8 @@ ImageViewId TextureCache<P>::VisitImageView(u32 index, bool compute) {
         return NULL_IMAGE_VIEW_ID;
     }
     auto const map_index = index | (compute ? Common::SlotId::TAGGED_VALUE : 0);
-    auto& flat = compute ? channel_state->compute_image_view_flat
-                         : channel_state->graphics_image_view_flat;
-    constexpr u32 FlatCap = 8192;
-    const auto remember = [&](ImageViewId id) {
-        if (index >= FlatCap) {
-            return;
-        }
-        if (flat.size() <= index) {
-            flat.resize(index + 1);
-        }
-        flat[index] = id;
-    };
-    // A clean image with no aliases does not need the upload path. The view id is the one Visit
-    // stored the last time this header changed.
-    const auto reuse_clean = [&](ImageViewId id) {
-        if (id == NULL_IMAGE_VIEW_ID) {
-            return id;
-        }
-        const ImageViewBase& image_view = slot_image_views[id];
-        if (image_view.IsBuffer()) {
-            return id;
-        }
-        Image& image = slot_images[image_view.image_id];
-        if (False(image.flags & ImageFlagBits::CpuModified) && image.aliased_images.empty() &&
-            image.lru_index != std::numeric_limits<size_t>::max()) {
-            lru_cache.Touch(image.lru_index, frame_tick);
-            static u64 reused = 0;
-            ++reused;
-            if (reused == 1 || reused == 100000 || reused % 1000000 == 0) {
-                LOG_INFO(HW_GPU, "Texture views reused {}", reused);
-            }
-            return id;
-        }
-        PrepareImageView(id, false, false);
-        return id;
-    };
     // Is new (on the tegra engine side)?
     auto const [descriptor, is_new] = table.Read(*gpu_memory, index);
-    if (!is_new && index < FlatCap && index < flat.size() &&
-        flat[index].index != Common::SlotId::INVALID_INDEX) {
-        return reuse_clean(flat[index]);
-    }
     if (is_new) {
         static const bool trace_native_image = std::getenv("EDEN_NX2_IMAGE_TRACE") != nullptr;
         static u32 native_image_traces{};
@@ -791,16 +732,15 @@ ImageViewId TextureCache<P>::VisitImageView(u32 index, bool compute) {
                 pair->second = CreateImageView(descriptor);
             PrepareImageView(pair->second, false, false);
             channel_state->image_view_ids.insert_or_assign(map_index, pair->second);
-            remember(pair->second);
             return pair->second;
         }
         channel_state->image_view_ids.insert_or_assign(map_index, NULL_IMAGE_VIEW_ID);
-        remember(NULL_IMAGE_VIEW_ID);
         return NULL_IMAGE_VIEW_ID;
     }
     auto const it = channel_state->image_view_ids.find(map_index);
-    remember(it->second);
-    return reuse_clean(it->second);
+    if (it->second != NULL_IMAGE_VIEW_ID)
+        PrepareImageView(it->second, false, false);
+    return it->second;
 }
 
 template <class P>

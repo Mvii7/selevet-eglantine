@@ -278,7 +278,6 @@ private:
         static constexpr u32 MaxBytes = 4096;
         struct Slot {
             StagingBufferRef ref{};
-            DAddr device_addr{};
             u64 tick{};
             u32 size{};
             std::array<u8, MaxBytes> bytes{};
