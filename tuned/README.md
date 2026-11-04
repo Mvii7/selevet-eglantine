@@ -89,6 +89,10 @@ To train your own profile, build with `tuned/pgo-gen-cache.cmake`, run with `LLV
 
 Graphics settings has **Limit speed to 30 FPS**. It holds presents to 30 per second and applies without restarting. The old separate 30 FPS download set `EDEN_NX2_PRESENT_HZ=30` in `nx2_switches.txt`. That line is no longer read.
 
+## Speed when a frame misses 60
+
+Reporting VRR does not keep Donkey Kong Bananza at full speed. The game still advances by one, two or three 60 Hz ticks, and a frame between those rates is either slow or, once the interval catches up, briefly fast. Bananza's step now follows how long the frame actually took, so it stays at full speed without the 30 FPS limit. That checkbox is unchanged: turn it on and presents still wait for 30 per second. A change that lasts two frames is taken whole; a single hitch only eases the step a tenth of the way, and the time that hitch did not step is not added to the next frame. A frame longer than 1/20 s still slows the game down. `EDEN_NX2_DECOUPLE_DT_CAP=N` sets that cap to 1/N seconds, with N from 10 to 60 and `0` meaning 1/10. `EDEN_NX2_DECOUPLE=0` leaves the game's own step. The emulation speed percentage still scales the step.
+
 ## Build 104 merge
 
 The source now also includes the changes from [Djihads80/Eglantine build-104](https://github.com/Djihads80/Eglantine/releases/tag/build-104). Sparse texture tile mapping (`nx2:gpu 216`) is included but off by default, because it ran about 15-20% slower on an RTX 3050. `EDEN_NX2_SPARSE_REMAP=1` in `nx2_switches.txt` turns it on.
@@ -119,4 +123,4 @@ GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.
 
 The changes in this repo were written with Claude (Anthropic), then tested in-game by the repo owner. They have not been reviewed by the Eglantine developers.
 
-The NUP loader and the 30 FPS checkbox were written with Grok 4.7.
+The NUP loader, the 30 FPS checkbox and the Bananza frame step were written with Grok 4.7.

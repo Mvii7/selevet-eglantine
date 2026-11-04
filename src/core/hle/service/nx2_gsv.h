@@ -31,6 +31,7 @@
 #include "common/swap.h"
 #include "common/thread.h"
 #include "core/core.h"
+#include "core/hle/service/nx2_frame_step.h"
 #include "core/hle/service/nx2_present.h"
 #include "core/hle/service/nx2_sparse_region.h"
 #include "core/device_memory.h"
@@ -1568,10 +1569,19 @@ private:
 
     void PaceToVblank() {
         // "Limit speed to 30 FPS" holds presents to 30. Otherwise the cap is 60.
+        // Bananza does not need the 30 cap for full speed: its step follows this present.
         const bool cap_30 = Settings::values.limit_speed_to_30.GetValue();
         const bool speed_limited =
             Settings::values.use_speed_limit.GetValue() && Settings::SpeedLimit() != 0;
+        const double speed_scale =
+            speed_limited ? static_cast<double>(Settings::SpeedLimit()) / 100.0 : 1.0;
+        // Recorded after any wait below, so the step is the time the frame actually took.
+        const auto note = [&] {
+            Nx2NotePresentedFrame(system.ApplicationMemory(), std::chrono::steady_clock::now(),
+                                  speed_scale);
+        };
         if (!speed_limited && !cap_30) {
+            note();
             return;
         }
         const long long present_hz = cap_30 ? 30LL : 60LL;
@@ -1594,6 +1604,7 @@ private:
             // Up to 2 ms late still counts as one vblank: present now rather than lose a frame.
             if (now > m_next_vblank && now - m_next_vblank < std::chrono::milliseconds{2}) {
                 m_next_vblank = now + interval;
+                note();
                 return;
             }
             if (now > m_next_vblank) {
@@ -1601,6 +1612,7 @@ private:
             }
             std::this_thread::sleep_until(m_next_vblank);
             m_next_vblank += interval;
+            note();
             return;
         }
         if (now > m_next_vblank + interval) {
@@ -1610,6 +1622,7 @@ private:
             std::this_thread::sleep_until(m_next_vblank);
         }
         m_next_vblank += interval;
+        note();
     }
 
     void WaitForFrame(u32 fence_id, u32 fence_value) {

@@ -28,6 +28,7 @@
 #include "core/hle/kernel/k_page_table.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_thread.h"
+#include "core/hle/service/nx2_frame_step.h"
 #include "core/loader/nso.h"
 #include "core/memory.h"
 
@@ -55,8 +56,9 @@ constexpr u32 PageAlignSize(u32 size) {
 // The Switch 2 SDK's nn::vi::detail::DefaultDisplay::QueryVrrSupported learns VRR support from a
 // display mode capability event Eden never signals, so it reports none. Title 4 then assumes a fixed
 // 60 Hz display and its speed swings with the frame rate; told VRR works, it enables it and times
-// its frames itself. Make the exported function store true and succeed (any SDK version: found by
-// name). EDEN_NX2_REPORT_VRR=0 leaves it alone.
+// its frames itself. Bananza still steps one, two or three vsyncs after that report, which is not
+// 1.0x at a frame rate in between, so its step is replaced separately. Make the exported function
+// store true and succeed (any SDK version: found by name). EDEN_NX2_REPORT_VRR=0 leaves it alone.
 bool ReportVrrSupported(std::span<u8> image, std::string_view module_name) {
     static const bool enabled = [] {
         const char* value = std::getenv("EDEN_NX2_REPORT_VRR");
@@ -253,6 +255,10 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
     }
 
     codeset.DataSegment().size += nso_header.segments[2].bss_size;
+    const u64 text_used = codeset.CodeSegment().size;
+    const u64 rodata_off = codeset.RODataSegment().offset;
+    const u64 data_off = codeset.DataSegment().offset;
+    const u64 data_used = codeset.DataSegment().size;
     u32 image_size = PageAlignSize(u32(codeset.memory.size()) + nso_header.segments[2].bss_size);
     codeset.memory.resize(image_size);
 
@@ -278,6 +284,39 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
             LOG_WARNING(Loader, "sdk: QueryVrrSupported was not patched. The game will assume a "
                                 "fixed 60 Hz display, and its speed will follow the frame rate. "
                                 "EDEN_NX2_REPORT_VRR=0 leaves this unpatched on purpose.");
+        }
+    }
+    std::optional<u64> frame_step_offset;
+    if (load_into_process && name == "main") {
+        Service::Nx2SetFrameStepAddress(0);
+        if (process.GetProgramId() == Service::Nx2BananzaProgramId && Service::Nx2DecoupleEnabled()) {
+            const u64 text_off = codeset.CodeSegment().offset;
+            const u64 text_end = (std::min)(text_off + codeset.CodeSegment().size,
+                                            rodata_off > text_off ? rodata_off : text_off + codeset.CodeSegment().size);
+            const u64 data_mapped_end = (std::min)(data_off + codeset.DataSegment().size, u64{image_size});
+            const u64 slack = data_mapped_end > data_off + data_used ? data_mapped_end - (data_off + data_used) : 0;
+            if (slack >= sizeof(float)) {
+                const u64 float_off = (data_mapped_end - sizeof(float)) & ~u64{3};
+                if (float_off >= data_off + data_used) {
+                    const auto step = Service::Nx2PatchBananzaFrameStep(
+                        codeset.memory, text_off, text_used, text_end, float_off, load_base);
+                    if (step.patch) {
+                        frame_step_offset = step.patch->float_offset;
+                        LOG_INFO(Loader,
+                                 "Bananza frame step at {:#x} follows the measured frame, capped at 1/{} s",
+                                 step.patch->site_offset, Service::Nx2DecoupleCapDenominator());
+                    } else {
+                        LOG_WARNING(Loader,
+                                    "Bananza frame step was not patched ({} reciprocal, {} scale, {} divide). "
+                                    "Its speed still follows whole vsyncs.",
+                                    step.vfr, step.scale, step.divide);
+                    }
+                }
+            } else if (data_used != 0) {
+                LOG_WARNING(Loader, "Bananza frame step was not patched; its data segment has no spare bytes");
+            }
+        } else if (process.GetProgramId() == Service::Nx2BananzaProgramId) {
+            LOG_INFO(Loader, "Bananza frame step left unchanged (EDEN_NX2_DECOUPLE=0)");
         }
     }
 
@@ -354,6 +393,9 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
     // Load codeset for current process
     LOG_INFO(Loader, "Module {} loaded at {:#x} (size {:#x})", nso_file.GetName(), load_base, image_size);
     process.LoadModule(system.Kernel(), std::move(codeset), load_base);
+    if (frame_step_offset) {
+        Service::Nx2SetFrameStepAddress(load_base + *frame_step_offset);
+    }
     return load_base + image_size;
 }
 
