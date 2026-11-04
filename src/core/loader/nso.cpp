@@ -28,7 +28,6 @@
 #include "core/hle/kernel/k_page_table.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_thread.h"
-#include "core/hle/service/nx2_frame_step.h"
 #include "core/loader/nso.h"
 #include "core/memory.h"
 
@@ -157,7 +156,7 @@ FileType AppLoader_NSO::IdentifyType(const FileSys::VirtualFile& in_file) {
     return FileType::NSO;
 }
 
-std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::System& system, const FileSys::VfsFile& nso_file, VAddr load_base, bool should_pass_arguments, bool load_into_process, std::optional<FileSys::PatchManager> pm, std::vector<Core::NCE::Patcher>* patches, s32 patch_index, u64 known_program_id) {
+std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::System& system, const FileSys::VfsFile& nso_file, VAddr load_base, bool should_pass_arguments, bool load_into_process, std::optional<FileSys::PatchManager> pm, std::vector<Core::NCE::Patcher>* patches, s32 patch_index) {
     if (nso_file.GetSize() < sizeof(NSOHeader))
         return std::nullopt;
     NSOHeader nso_header{};
@@ -255,10 +254,6 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
     }
 
     codeset.DataSegment().size += nso_header.segments[2].bss_size;
-    const u64 text_used = codeset.CodeSegment().size;
-    const u64 rodata_off = codeset.RODataSegment().offset;
-    const u64 data_off = codeset.DataSegment().offset;
-    const u64 data_used = codeset.DataSegment().size;
     u32 image_size = PageAlignSize(u32(codeset.memory.size()) + nso_header.segments[2].bss_size);
     codeset.memory.resize(image_size);
 
@@ -286,54 +281,6 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
                                 "EDEN_NX2_REPORT_VRR=0 leaves this unpatched on purpose.");
         }
     }
-    std::optional<u64> frame_step_offset;
-    const u64 program_id = known_program_id != 0 ? known_program_id : process.GetProgramId();
-    if (name == "main" && program_id == Service::Nx2BananzaProgramId && Service::Nx2DecoupleEnabled()) {
-        // The layout pass and the load pass must grow by the same amount. Bananza's data and bss
-        // already fill the last page, so the step float gets a page of its own.
-        const u64 mapped_end = (std::min)(data_off + codeset.DataSegment().size, u64{image_size});
-        const u64 slack = mapped_end > data_off + data_used ? mapped_end - (data_off + data_used) : 0;
-        if (slack < sizeof(float)) {
-            const u32 page = PageAlignSize(1);
-            codeset.memory.resize(codeset.memory.size() + page);
-            codeset.DataSegment().size += page;
-            image_size += page;
-        }
-    }
-    if (load_into_process && name == "main") {
-        Service::Nx2SetFrameStepAddress(0);
-        if (program_id == Service::Nx2BananzaProgramId && Service::Nx2DecoupleEnabled()) {
-            const u64 text_off = codeset.CodeSegment().offset;
-            const u64 text_end = (std::min)(text_off + codeset.CodeSegment().size,
-                                            rodata_off > text_off ? rodata_off : text_off + codeset.CodeSegment().size);
-            const u64 text_slack = text_end > text_off + text_used ? text_end - (text_off + text_used) : 0;
-            const u64 data_mapped_end = (std::min)(data_off + codeset.DataSegment().size, u64{image_size});
-            const u64 float_off = (data_mapped_end - sizeof(float)) & ~u64{3};
-            if (text_slack < 12) {
-                LOG_WARNING(Loader,
-                            "Bananza frame step was not patched; its code segment has {} spare bytes",
-                            text_slack);
-            } else if (float_off >= data_off + data_used && float_off + sizeof(float) <= data_mapped_end) {
-                const auto step = Service::Nx2PatchBananzaFrameStep(
-                    codeset.memory, text_off, text_used, text_end, float_off, load_base);
-                if (step.patch) {
-                    frame_step_offset = step.patch->float_offset;
-                    LOG_INFO(Loader,
-                             "Bananza frame step at {:#x} follows the measured frame ({} site{}), capped at 1/{} s",
-                             step.patch->site_offset, step.applied, step.applied == 1 ? "" : "s",
-                             Service::Nx2DecoupleCapDenominator());
-                } else {
-                    LOG_WARNING(Loader,
-                                "Bananza frame step was not patched ({} reciprocal, {} scale, {} divide, "
-                                "{} plain, {} pooled). Its speed still follows whole vsyncs.",
-                                step.vfr, step.scale, step.divide, step.plain, step.pooled);
-                }
-            }
-        } else if (program_id == Service::Nx2BananzaProgramId) {
-            LOG_INFO(Loader, "Bananza frame step left unchanged");
-        }
-    }
-
 #ifdef HAS_NCE
     // If we are computing the process code layout and using nce backend, patch.
     const auto& code = codeset.CodeSegment();
@@ -407,9 +354,6 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
     // Load codeset for current process
     LOG_INFO(Loader, "Module {} loaded at {:#x} (size {:#x})", nso_file.GetName(), load_base, image_size);
     process.LoadModule(system.Kernel(), std::move(codeset), load_base);
-    if (frame_step_offset) {
-        Service::Nx2SetFrameStepAddress(load_base + *frame_step_offset);
-    }
     return load_base + image_size;
 }
 

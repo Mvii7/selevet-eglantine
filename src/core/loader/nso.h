@@ -100,7 +100,7 @@ public:
                                            bool should_pass_arguments, bool load_into_process,
                                            std::optional<FileSys::PatchManager> pm = {},
                                            std::vector<Core::NCE::Patcher>* patches = nullptr,
-                                           s32 patch_index = -1, u64 known_program_id = 0);
+                                           s32 patch_index = -1);
 
     LoadResult Load(Kernel::KProcess& process, Core::System& system) override;
 

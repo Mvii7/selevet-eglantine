@@ -87,11 +87,11 @@ To train your own profile, build with `tuned/pgo-gen-cache.cmake`, run with `LLV
 
 ## 30 FPS limit
 
-Graphics settings has **Limit speed to 30 FPS**. It stops presents faster than 30 per second and applies without restarting. A game that asks for a slower present keeps that slower rate. The old separate 30 FPS download set `EDEN_NX2_PRESENT_HZ=30` in `nx2_switches.txt`. That line is no longer read.
+Graphics settings has **Limit speed to 30 FPS**. It holds presents to 30 per second and applies without restarting. The old separate 30 FPS download set `EDEN_NX2_PRESENT_HZ=30` in `nx2_switches.txt`. That line is no longer read.
 
 ## Speed when a frame misses 60
 
-Presents follow build 31 at 100%: one 60 Hz tick, and a late frame is shown immediately without paying that time back. When the game asks for two or three ticks, the present waits that long, so that longer step cannot play out in a single tick. `EDEN_NX2_DECOUPLE=1` is the experimental step rewrite and is off unless set.
+At 100% the present pace is one 60 Hz tick. A frame that misses it is shown immediately, and that missed time is not added to a later present.
 
 ## Build 104 merge
 
@@ -123,4 +123,4 @@ GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.
 
 The changes in this repo were written with Claude (Anthropic), then tested in-game by the repo owner. They have not been reviewed by the Eglantine developers.
 
-The NUP loader, the 30 FPS checkbox and the Bananza frame step were written with Grok 4.7.
+The NUP loader and the 30 FPS checkbox were written with Grok 4.7.

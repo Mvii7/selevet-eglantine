@@ -31,9 +31,7 @@
 #include "common/swap.h"
 #include "common/thread.h"
 #include "core/core.h"
-#include "core/hle/service/nx2_frame_step.h"
 #include "core/hle/service/nx2_present.h"
-#include "core/hle/service/nx2_present_pacer.h"
 #include "core/hle/service/nx2_sparse_region.h"
 #include "core/device_memory.h"
 #include "video_core/rasterizer_interface.h"
@@ -1511,7 +1509,7 @@ private:
         const auto waited = std::chrono::steady_clock::now();
         Composite(w[5], ~w[22], w[24], w[6], w[7], w[8]);
         const auto composited = std::chrono::steady_clock::now();
-        PaceToVblank(w[12]);
+        PaceToVblank();
         const auto paced = std::chrono::steady_clock::now();
         // Where each frame's time goes on the present thread, averaged per 600 presents: the
         // game is blocked here while Eden's GPU thread catches up (fence) and composites.
@@ -1563,58 +1561,26 @@ private:
     u32 m_previous_fence_id{~0U}; // none yet (WaitForFrame ignores ids >= 192)
     u32 m_previous_fence_value{};
 
-    // The console flips one frame per vblank and keeps the rest queued. Present word 12 is
-    // (swap interval << 16) | refresh. One tick is the usual pace. Two or three ticks are waited
-    // out, because returning after one plays that longer step at double or triple speed.
-    // A missed slot is not repaid with another immediate present.
-    Nx2PresentPacer m_present_pacer;
+    // Build 31: one present per 60 Hz tick. A frame later than that is shown at once, and the
+    // missed time is not added to a later present. Word 12 is not used. Waiting out a longer
+    // request held the game on that request.
     std::chrono::steady_clock::time_point m_next_vblank{};
-    u32 m_paced_interval{};
-    u32 m_paced_refresh{};
-    u32 m_requested_interval{};
-    u32 m_requested_refresh{};
+    u32 m_logged_present_hz{};
 
-    void PaceToVblank(u32 timing) {
-        // "Limit speed to 30 FPS" stops presents faster than 30. A request for three vblanks stays.
+    void PaceToVblank() {
         const bool cap_30 = Settings::values.limit_speed_to_30.GetValue();
         const bool speed_limited =
             Settings::values.use_speed_limit.GetValue() && Settings::SpeedLimit() != 0;
-        const double speed_scale =
-            speed_limited ? static_cast<double>(Settings::SpeedLimit()) / 100.0 : 1.0;
-        // Recorded after any wait below, so a patched step is the time the frame actually took.
-        const auto note = [&] {
-            Nx2NotePresentedFrame(system.ApplicationMemory(), std::chrono::steady_clock::now(),
-                                  speed_scale);
-        };
         if (!speed_limited && !cap_30) {
-            note();
             return;
         }
-        const u32 requested_interval = std::clamp<u32>(timing >> 16, 1u, 4u);
-        const u32 requested_refresh =
-            (timing & 0xffff) >= 30 && (timing & 0xffff) <= 240 ? timing & 0xffff : 60;
-        // Build 31 paces one 60 Hz tick. Returning on that tick while the game asked for two or
-        // three is the speed-up: the longer step plays out in one tick. Wait those ticks out.
-        u32 swap_interval = requested_interval >= 2 ? requested_interval : 1u;
-        u32 refresh_rate = 60;
-        if (cap_30) {
-            swap_interval = (std::max)(swap_interval, 2u);
-        }
-        if (swap_interval != m_paced_interval || refresh_rate != m_paced_refresh ||
-            requested_interval != m_requested_interval || requested_refresh != m_requested_refresh) {
-            m_paced_interval = swap_interval;
-            m_paced_refresh = refresh_rate;
-            m_requested_interval = requested_interval;
-            m_requested_refresh = requested_refresh;
-            LOG_INFO(Service,
-                     "nx2:vi2 present #{} holding interval {} at {} Hz; game asked for {} at {} Hz "
-                     "(word 12 = {:#x})",
-                     m_presents, swap_interval, refresh_rate, requested_interval, requested_refresh,
-                     timing);
+        const long long present_hz = cap_30 ? 30LL : 60LL;
+        if (present_hz != m_logged_present_hz) {
+            m_logged_present_hz = static_cast<u32>(present_hz);
+            LOG_INFO(Service, "nx2:vi2 present #{} pacing {} Hz", m_presents, present_hz);
         }
         const auto interval = std::chrono::nanoseconds{
-            100'000'000'000LL * swap_interval / refresh_rate /
-            (speed_limited ? Settings::SpeedLimit() : 100)};
+            100'000'000'000LL / present_hz / (speed_limited ? Settings::SpeedLimit() : 100)};
         const auto now = std::chrono::steady_clock::now();
         // EDEN_NX2_VBLANK_ALIGN=1: a late frame waits for the next vblank, as on a fixed-rate
         // console display. Off: the SDK now reports VRR (nso.cpp), and title 4 then times its own
@@ -1627,7 +1593,6 @@ private:
             // Up to 2 ms late still counts as one vblank: present now rather than lose a frame.
             if (now > m_next_vblank && now - m_next_vblank < std::chrono::milliseconds{2}) {
                 m_next_vblank = now + interval;
-                note();
                 return;
             }
             if (now > m_next_vblank) {
@@ -1635,15 +1600,15 @@ private:
             }
             std::this_thread::sleep_until(m_next_vblank);
             m_next_vblank += interval;
-            note();
             return;
         }
-        const auto step = m_present_pacer.Advance(now, interval);
-        if (step.sleep) {
-            std::this_thread::sleep_until(step.deadline);
+        if (now > m_next_vblank + interval) {
+            // Slower than the pace: show at once and don't bank the lost time.
+            m_next_vblank = now;
+        } else if (now < m_next_vblank) {
+            std::this_thread::sleep_until(m_next_vblank);
         }
-        m_next_vblank = step.deadline + interval;
-        note();
+        m_next_vblank += interval;
     }
 
     void WaitForFrame(u32 fence_id, u32 fence_value) {
