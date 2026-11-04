@@ -122,9 +122,7 @@ Donkey Kong Bananza's hilltop layer is a larger terrain than the earlier worlds.
 
 The command-entry batch keeps the entries that are still being read, up to 16384, instead of the first 1024 from earlier areas.
 
-A vertex, index, or storage range the guest has not written since its last upload is not scanned again, including when some other range in that 4 MiB page was written. The first time that happens, and again at 100000, the log says `Clean buffer range skipped`.
-
-A constant buffer is copied to the host GPU once per draw. Another shader stage in that draw that binds the same bytes does not copy them again. The first time that happens, and again at 100000, the log says `Stage uniform reused`.
+A vertex, index, or storage buffer the guest has not written since its last upload is not scanned again. The first time that happens, and again at 100000, the log says `Clean buffer uploads skipped`.
 
 ## License and AI disclosure
 
@@ -132,4 +130,4 @@ GPL-3.0-or-later, the same as the projects it's based on. See `LICENSE.txt`.
 
 The changes in this repo were written with Claude (Anthropic), then tested in-game by the repo owner. They have not been reviewed by the Eglantine developers.
 
-The NUP loader, the 30 FPS checkbox, the clean buffer range skip, and the per-draw uniform copy were written with Grok 4.7.
+The NUP loader, the 30 FPS checkbox, and the clean buffer upload skip were written with Grok 4.7.

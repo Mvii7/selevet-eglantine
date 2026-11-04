@@ -62,26 +62,6 @@ struct WordManager {
         return upload_words != 0;
     }
 
-    /// True when this range, not the rest of the 4 MiB page, still has a CPU or untracked bit.
-    /// A write next to a mesh must not make that mesh look dirty.
-    [[nodiscard]] bool RangeHasPendingUpload(u64 offset, u64 size) const noexcept {
-        if (upload_words == 0 || size == 0) {
-            return false;
-        }
-        const std::span<const u64> cpu_words = Span(Type::CPU);
-        const std::span<const u64> untracked_words = Span(Type::Untracked);
-        bool pending = false;
-        IterateWords(static_cast<size_t>(offset), static_cast<size_t>(size),
-                     [&](size_t index, u64 mask) {
-                         if (((cpu_words[index] | untracked_words[index]) & mask) != 0) {
-                             pending = true;
-                             return true;
-                         }
-                         return false;
-                     });
-        return pending;
-    }
-
     static u64 ExtractBits(u64 word, size_t page_start, size_t page_end) {
         constexpr size_t number_bits = sizeof(u64) * 8;
         const size_t limit_page_end = number_bits - (std::min)(page_end, number_bits);
@@ -191,17 +171,14 @@ struct WordManager {
     void ForEachModifiedRange(Type type, bool clear, VAddr query_cpu_range, s64 size, Func&& func) {
         //static_assert(type != Type::Untracked);
         // Clean page: every CPU and untracked bit is already clear, so the walk would
-        // upload nothing and notify nothing. A clean range inside a page that is dirty
-        // somewhere else is the same: this walk would not upload or notify.
-        const size_t offset = static_cast<size_t>(query_cpu_range - cpu_addr);
-        if (type == Type::CPU &&
-            (upload_words == 0 || size <= 0 ||
-             !RangeHasPendingUpload(static_cast<u64>(offset), static_cast<u64>(size)))) {
+        // upload nothing and notify nothing.
+        if (type == Type::CPU && upload_words == 0) {
             return;
         }
         std::span<u64> state_words = Span(type);
         std::span<u64> untracked_words = Span(Type::Untracked);
         std::span<u64> cached_words = Span(Type::CachedCPU);
+        size_t const offset = query_cpu_range - cpu_addr;
         bool pending = false;
         size_t pending_offset{};
         size_t pending_pointer{};
