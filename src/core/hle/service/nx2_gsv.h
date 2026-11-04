@@ -39,6 +39,7 @@
 #include "core/frontend/framebuffer_layout.h"
 #include "core/perf_stats.h"
 #include "video_core/gpu.h"
+#include "video_core/nx2.h"
 #include "video_core/framebuffer_config.h"
 #include "core/core_timing.h"
 #include "core/hle/kernel/k_client_session.h"
@@ -1483,6 +1484,9 @@ private:
         const auto* w = ctx.CommandBuffer();
         ++m_presents;
         Core::g_nx2_present_count.fetch_add(1, std::memory_order_relaxed);
+        if (m_presents == 1) {
+            m_draw_mark = Tegra::g_nx2_draw_count.load(std::memory_order_relaxed);
+        }
         if (m_presents <= 4 || (m_presents % 600) == 0) {
             LOG_INFO(Service, "nx2:vi2 229 present #{} token={:#x} slot={} image={}", m_presents,
                      u64{w[2]} | (u64{w[3]} << 32), w[4], w[5]);
@@ -1531,13 +1535,18 @@ private:
             }
             m_stats.last_present = entered;
             if (++m_stats.presents == 600) {
+                const u64 draws_now = Tegra::g_nx2_draw_count.load(std::memory_order_relaxed);
+                const u64 draws = draws_now - m_draw_mark;
+                m_draw_mark = draws_now;
+                const u64 draws_per_s =
+                    m_stats.frame_us > 0 ? draws * 1000000 / static_cast<u64>(m_stats.frame_us) : 0;
                 LOG_INFO(Service,
                          "nx2:vi2 last 600 presents: frame {} us (max {}, {} over 100 ms), "
                          "blocked on the GPU fence {} us (max {}), composite {} us, vblank "
-                         "pacing {} us",
+                         "pacing {} us, draws {} ({} /s)",
                          m_stats.frame_us / 599, m_stats.max_frame_us, m_stats.hitches,
                          m_stats.fence_us / 600, m_stats.max_fence_us, m_stats.composite_us / 600,
-                         m_stats.pace_us / 600);
+                         m_stats.pace_us / 600, draws, draws_per_s);
                 m_stats = {.last_present = entered};
             }
         }
@@ -1560,6 +1569,7 @@ private:
     } m_stats{};
     u32 m_previous_fence_id{~0U}; // none yet (WaitForFrame ignores ids >= 192)
     u32 m_previous_fence_value{};
+    u64 m_draw_mark{}; ///< g_nx2_draw_count at the previous 600-present line
 
     // The console flips one frame per 60 Hz vblank and keeps the rest queued, so a game can't
     // present faster than that. Every slot is reported free here: hold each present until the

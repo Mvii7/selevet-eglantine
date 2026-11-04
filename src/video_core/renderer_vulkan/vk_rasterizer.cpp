@@ -32,6 +32,7 @@
 #include "video_core/indirect_draw_reset.h"
 #include "video_core/control/channel_state.h"
 #include "video_core/native_query_trace.h"
+#include "video_core/nx2.h"
 #include "video_core/readback_diagnostics.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/engines/kepler_compute.h"
@@ -751,6 +752,7 @@ bool SkipShadowPass(const Tegra::Engines::Maxwell3D& maxwell3d) {
 } // Anonymous namespace
 
 void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
+    Tegra::g_nx2_draw_count.fetch_add(1, std::memory_order_relaxed);
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::Draw};
     TraceWindowTarget(*maxwell3d, *gpu_memory, is_indexed ? "draw-indexed" : "draw",
                       is_indexed ? maxwell3d->draw_manager.draw_state.index_buffer.count
@@ -898,6 +900,7 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
 }
 
 void RasterizerVulkan::DrawIndirect() {
+    Tegra::g_nx2_draw_count.fetch_add(1, std::memory_order_relaxed);
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::Draw};
     const auto& params = maxwell3d->draw_manager.indirect_state;
     if (SkipShadowPass(*maxwell3d)) {
