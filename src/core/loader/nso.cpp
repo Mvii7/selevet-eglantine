@@ -55,8 +55,9 @@ constexpr u32 PageAlignSize(u32 size) {
 // The Switch 2 SDK's nn::vi::detail::DefaultDisplay::QueryVrrSupported learns VRR support from a
 // display mode capability event Eden never signals, so it reports none. Title 4 then assumes a fixed
 // 60 Hz display and its speed swings with the frame rate; told VRR works, it enables it and times
-// its frames itself. Make the exported function store true and succeed (any SDK version: found by
-// name). EDEN_NX2_REPORT_VRR=0 leaves it alone.
+// its frames itself. Donkey Kong Bananza version 458752 then snaps that time to one, two or three
+// vsyncs. PatchBananzaFrameRate keeps the measured rate. Make the exported function store true and
+// succeed (any SDK version: found by name). EDEN_NX2_REPORT_VRR=0 leaves it alone.
 bool ReportVrrSupported(std::span<u8> image, std::string_view module_name) {
     static const bool enabled = [] {
         const char* value = std::getenv("EDEN_NX2_REPORT_VRR");
@@ -132,6 +133,58 @@ bool ReportVrrSupported(std::span<u8> image, std::string_view module_name) {
         return true;
     }
     return false;
+}
+
+// Donkey Kong Bananza version 458752, module SilverStar, build id
+// e25c90c1c136638885659fd55bf8a03b3403489d. 0x204934 keeps one vsync above 39 Hz and uses
+// (rate + 59) / rate vsyncs at 39 Hz and below, so a 30 Hz frame steps two vsyncs and a 20 Hz frame
+// steps three. The measured rate is clamped to 20-60 and applied on that same frame. The waits that
+// held the next frame open (0x1578e94, and the 1/Hz fill at 0x204328) do not run: the fill is 1/60.
+// A late frame no longer forces interval 2 or 3 on its own. From 40 to 59 Hz the game still steps
+// one vsync. EDEN_NX2_FRAME_RATE=0 leaves the instructions alone. A different build is left alone.
+bool PatchBananzaFrameRate(std::span<u8> image) {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_FRAME_RATE");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (!enabled) {
+        LOG_INFO(Loader, "Bananza 458752: frame rate patch left off");
+        return true;
+    }
+    const auto word = [&](u32 offset) -> u32 {
+        u32 value;
+        std::memcpy(&value, image.data() + offset, sizeof(value));
+        return value;
+    };
+    const auto put = [&](u32 offset, u32 value) {
+        std::memcpy(image.data() + offset, &value, sizeof(value));
+    };
+    if (image.size() < 0x1578ec8 || word(0x20494c) != 0x2a0103f3 || word(0x204950) != 0x6b01011f ||
+        word(0x204990) != 0x5400010d || word(0x2049b0) != 0xf90007e0 || word(0x2049d0) != 0x1100ee68 ||
+        word(0x2046c4) != 0x2a0a03e1 || word(0x2046dc) != 0x5400052c || word(0x20471c) != 0xf9401e6c ||
+        word(0x204720) != 0xb50006cc || word(0x1578e94) != 0xd503237f || word(0x204328) != 0x5e21d800 ||
+        word(0x204450) != 0x944de3fa || word(0x20454c) != 0x944de3bb) {
+        return false;
+    }
+    // 0x1578e94 returns at once. The bytes after it are the clamp and the 1/60 fill.
+    put(0x1578e94, 0xd65f03c0);
+    static constexpr u32 Caves[] = {
+        0x2a0103f3, 0x7100527f, 0x54000042, 0x52800293, 0x7100f27f, 0x54000049,
+        0x52800793, 0x2a1303e1, 0x17b22ea6, // clamp w19/w1 to 20..60, b 0x204950
+        0x52a84e11, 0x1e270220, 0x17b22d1a, // s0 = 60.0f, b 0x20432c
+    };
+    std::memcpy(image.data() + 0x1578e98, Caves, sizeof(Caves));
+    put(0x20494c, 0x144dd153); // b clamp
+    put(0x204328, 0x144dd2e5); // b fill
+    // A lower rate used to wait out several frames before it was applied. Apply it now.
+    put(0x2046c4, 0x2a0b03e1); // mov w1, w11
+    put(0x2046dc, 0xd503201f); // nop
+    put(0x20471c, 0x2a0b03e1); // mov w1, w11
+    put(0x204720, 0x17ffffea); // b 0x2046c8
+    put(0x204450, 0xd503201f);
+    put(0x20454c, 0xd503201f);
+    LOG_INFO(Loader, "Bananza 458752: slow frames step 2 or 3 vsyncs, fill stays 1/60");
+    return true;
 }
 } // Anonymous namespace
 
@@ -280,7 +333,14 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
                                 "EDEN_NX2_REPORT_VRR=0 leaves this unpatched on purpose.");
         }
     }
-
+    static constexpr std::array<u8, 0x20> Bananza458752{0xe2, 0x5c, 0x90, 0xc1, 0xc1, 0x36, 0x63, 0x88,
+                                                        0x85, 0x65, 0x9f, 0xd5, 0x5b, 0xf8, 0xa0, 0x3b,
+                                                        0x34, 0x03, 0x48, 0x9d};
+    if (nso_header.build_id == Bananza458752 &&
+        !PatchBananzaFrameRate(std::span{codeset.memory}.subspan(module_start))) {
+        LOG_WARNING(Loader, "Bananza 458752: frame rate patch did not match this executable and was "
+                            "left unchanged. EDEN_NX2_FRAME_RATE=0 leaves it unpatched on purpose.");
+    }
 #ifdef HAS_NCE
     // If we are computing the process code layout and using nce backend, patch.
     const auto& code = codeset.CodeSegment();

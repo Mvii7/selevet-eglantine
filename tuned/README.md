@@ -89,6 +89,10 @@ To train your own profile, build with `tuned/pgo-gen-cache.cmake`, run with `LLV
 
 Graphics settings has **Limit speed to 30 FPS**. It holds presents to 30 per second and applies without restarting. The old separate 30 FPS download set `EDEN_NX2_PRESENT_HZ=30` in `nx2_switches.txt`. That line is no longer read.
 
+## Speed when a frame misses 60
+
+Donkey Kong Bananza version 458752 clamps the measured rate to 20-60 Hz. At 39 Hz and below a frame steps two or three vsyncs, and that choice is applied on the same frame. The frame fill stays 1/60, so a slow frame does not hold the next one open. At 100% the host lets the game time its own frames. The 30 FPS limit, and a speed limit other than 100%, still pace presents. `EDEN_NX2_FRAME_RATE=0` leaves the game's rate code unchanged.
+
 ## Build 104 merge
 
 The source now also includes the changes from [Djihads80/Eglantine build-104](https://github.com/Djihads80/Eglantine/releases/tag/build-104). Sparse texture tile mapping (`nx2:gpu 216`) is included but off by default, because it ran about 15-20% slower on an RTX 3050. `EDEN_NX2_SPARSE_REMAP=1` in `nx2_switches.txt` turns it on.
@@ -107,7 +111,7 @@ The CPU translator no longer uses AVX-512, even on CPUs that have it (`EDEN_NX2_
 
 ## Performance build 4
 
-The loader makes the Switch 2 SDK's `nn::vi::detail::DefaultDisplay::QueryVrrSupported` report VRR support, found by its exported name (`EDEN_NX2_REPORT_VRR=0` turns it off). Switch 2 draws skip a pipeline that is still being built instead of waiting for it when asynchronous shaders are on (`EDEN_NX2_ASYNC_SKIP=0`). `EDEN_NX2_VBLANK_ALIGN=1` holds late frames to the next 60 Hz vblank. A debug readback that froze the game once is off by default.
+The loader makes the Switch 2 SDK's `nn::vi::detail::DefaultDisplay::QueryVrrSupported` report VRR support, found by its exported name (`EDEN_NX2_REPORT_VRR=0` turns it off). Switch 2 draws skip a pipeline that is still being built instead of waiting for it when asynchronous shaders are on (`EDEN_NX2_ASYNC_SKIP=0`). `EDEN_NX2_VBLANK_ALIGN=1` holds late frames to the next vblank while the host is pacing (the 30 FPS limit, or a speed limit other than 100%). A debug readback that froze the game once is off by default.
 
 ## NUP
 
