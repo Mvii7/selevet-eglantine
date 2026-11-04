@@ -37,7 +37,7 @@ MemoryManager::MemoryManager(Core::System& system_, MaxwellDeviceMemoryManager& 
     , entries{}, big_entries{}
     , page_table{address_space_bits, address_space_bits + page_bits - 38, page_bits != big_page_bits ? page_bits : 0}
     , kind_map{PTEKind::INVALID}, unique_identifier{unique_identifier_generator.fetch_add(1, std::memory_order_acq_rel)}
-    , accumulator{}, uniform_accumulator{}
+    , accumulator{}
 {
     address_space_size = 1ULL << address_space_bits;
     page_size = 1ULL << page_bits;
@@ -807,23 +807,12 @@ void MemoryManager::GetSubmappedRangeImpl(GPUVAddr gpu_addr, std::size_t size, b
     split(0, 0, 0);
 }
 
-void MemoryManager::AccumulateUniform(GPUVAddr gpu_addr, std::size_t size) {
-    uniform_accumulator.Add(gpu_addr, size);
-    Nx2BumpUniformMemory();
-}
-
 void MemoryManager::FlushCaching() {
     // Flush from the invalidate accumulator
     if (accumulator.InvalidateAll([this](GPUVAddr addr, size_t size) {
         GetSubmappedRangeImpl<false>(addr, size, page_stash2);
     })) {
         rasterizer->InnerInvalidation(page_stash2);
-        page_stash2.clear();
-    }
-    if (uniform_accumulator.InvalidateAll([this](GPUVAddr addr, size_t size) {
-            GetSubmappedRangeImpl<false>(addr, size, page_stash2);
-        })) {
-        rasterizer->InnerUniformInvalidation(page_stash2);
         page_stash2.clear();
     }
 }

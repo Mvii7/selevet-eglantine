@@ -172,10 +172,6 @@ public:
         accumulator.Add(gpu_addr, size);
     }
 
-    /// Constant-buffer write. Invalidated with the other cached writes, but it does not by
-    /// itself force the next draw to rebuild textures and vertex buffers.
-    void AccumulateUniform(GPUVAddr gpu_addr, std::size_t size);
-
     const u8* GetSpan(const GPUVAddr src_addr, const std::size_t size) const;
     u8* GetSpan(const GPUVAddr src_addr, const std::size_t size);
 
@@ -252,7 +248,6 @@ private:
 
     const size_t unique_identifier;
     VideoCommon::InvalidationAccumulator accumulator;
-    VideoCommon::InvalidationAccumulator uniform_accumulator;
 
     static std::atomic<size_t> unique_identifier_generator;
 

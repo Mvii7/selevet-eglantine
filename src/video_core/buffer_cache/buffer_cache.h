@@ -170,11 +170,6 @@ void BufferCache<P>::UnmapGPUMemory(size_t as_id, GPUVAddr gpu_addr, size_t size
 template <class P>
 void BufferCache<P>::WriteMemory(DAddr device_addr, u64 size) {
     Tegra::Nx2BumpDrawMemory();
-    MarkCpuModified(device_addr, size);
-}
-
-template <class P>
-void BufferCache<P>::MarkCpuModified(DAddr device_addr, u64 size) {
     CacheTrackingDiagnostics::Record(CacheTrackingDiagnostics::Event::BufferCpuMark,
                                       device_addr, size);
     if (IsRegionGpuModified(device_addr, size)) {
