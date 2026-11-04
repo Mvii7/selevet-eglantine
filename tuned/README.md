@@ -91,9 +91,7 @@ Graphics settings has **Limit speed to 30 FPS**. It stops presents faster than 3
 
 ## Speed when a frame misses 60
 
-Present word 12 says how many vblanks the frame should hold. Returning after one vblank when the game asked for two makes that frame run at double speed, and returning at 60 Hz while the game is still stepping one vblank makes a missed frame run slow. Each present now waits out the interval it requested. A present that misses its slot is shown immediately, and the next one still waits a full interval, so the miss is not paid back.
-
-Reporting VRR does not change Bananza's own step. That step is still one, two or three 60 Hz ticks unless the loader rewrites it. The rewrite looks for one integer-to-seconds calculation. This build of the game did not contain the sequences it knows, and the log says so. `EDEN_NX2_DECOUPLE=0` leaves the step alone. `EDEN_NX2_DECOUPLE_DT_CAP=N` sets the cap to 1/N seconds when a rewrite does apply, with N from 10 to 60 and `0` meaning 1/10.
+Bananza presents are capped at 60 Hz. A finished frame is not held to a slower rate the game wrote into the present. The simulation step is rewritten to the time that frame actually took, so 40 fps and 20 fps stay at full speed. One step is never longer than 1/20 s. A change that lasts two frames is taken whole; a single hitch only eases the step a tenth of the way, and the time that hitch did not step is not added to the next frame. `EDEN_NX2_DECOUPLE_DT_CAP=N` sets that cap to 1/N seconds, with N from 10 to 60 and `0` meaning 1/10. `EDEN_NX2_DECOUPLE=0` leaves the game's own step. The loader log says whether the rewrite matched.
 
 ## Build 104 merge
 

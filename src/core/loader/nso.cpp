@@ -323,9 +323,9 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
                              step.patch->site_offset, Service::Nx2DecoupleCapDenominator());
                 } else {
                     LOG_WARNING(Loader,
-                                "Bananza frame step was not patched ({} reciprocal, {} scale, {} divide). "
-                                "Its speed still follows whole vsyncs.",
-                                step.vfr, step.scale, step.divide);
+                                "Bananza frame step was not patched ({} reciprocal, {} scale, {} divide, "
+                                "{} plain, {} pooled). Its speed still follows whole vsyncs.",
+                                step.vfr, step.scale, step.divide, step.plain, step.pooled);
                 }
             }
         } else if (program_id == Service::Nx2BananzaProgramId) {

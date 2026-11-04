@@ -187,6 +187,31 @@ TEST_CASE("Bananza frame step patch leaves ambiguous or broken code alone", "[nx
     CHECK(Word(tight, 0x54) == kVfr[5]);
 }
 
+TEST_CASE("Bananza frame step patch follows a pooled 1/60 multiply", "[nx2]") {
+    constexpr u64 kLoad = 0x80000000;
+    auto image = Image();
+    const u32 recip = 0x3c888889;
+    std::memcpy(image.data() + 0x2000, &recip, sizeof(recip));
+    // scvtf s0, w0; adrp x8, #0x1000; ldr s1, [x8]; fmul s0, s0, s1
+    Put(image, 0x1000, {0x1E230000, 0xB0000008, 0xBD400101, 0x1E210800});
+    const auto scan = Service::Nx2PatchBananzaFrameStep(image, 0x1000, 0x10, 0x1100, 0x2FFC, kLoad);
+    REQUIRE(scan.patch);
+    CHECK(scan.scale == 1);
+    CHECK(scan.pooled == 1);
+    CHECK(scan.patch->site_offset == 0x100C);
+    const u32 adrp = Word(image, 0x1010);
+    const u32 ldr = Word(image, 0x1014);
+    s32 imm21 = static_cast<s32>((((adrp >> 5) & 0x7FFFF) << 2) | ((adrp >> 29) & 3));
+    if (imm21 & (1 << 20)) {
+        imm21 |= ~((1 << 21) - 1);
+    }
+    const u64 loaded = static_cast<u64>(static_cast<s64>(((kLoad + 0x1010) & ~u64{0xFFF}) +
+                                                         (static_cast<s64>(imm21) << 12))) +
+                       (((ldr >> 10) & 0xFFF) << 2);
+    CHECK(loaded == kLoad + 0x2FFC);
+    CHECK((ldr & 31) == 0);
+}
+
 TEST_CASE("A reciprocal step is preferred over another scale in the same image", "[nx2]") {
     auto image = Image();
     Put(image, 0x40, {kVfr[0], kVfr[1], kVfr[2], kVfr[3], kVfr[4], kVfr[5], kVfr[6], kVfr[7]});

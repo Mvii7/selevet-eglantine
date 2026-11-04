@@ -70,11 +70,51 @@ bool IsUdiv(u32 word, u32& rd, u32& rn, u32& rm) {
 
 bool IsCvtFromW(u32 word, u32& sd, u32& rn) {
     const u32 op = word & 0xFFFFFC00;
-    if (op != 0x1E220000 && op != 0x1E230000) {
+    // scvtf/ucvtf of a 32-bit or 64-bit integer into a single.
+    if (op != 0x1E220000 && op != 0x1E230000 && op != 0x1E620000 && op != 0x1E630000) {
         return false;
     }
     rn = (word >> 5) & 31;
     sd = word & 31;
+    return true;
+}
+
+bool IsAdrp(u32 word, u32& rd, s64& byte_delta) {
+    if ((word & 0x9F000000) != 0x90000000) {
+        return false;
+    }
+    rd = word & 31;
+    const u32 immlo = (word >> 29) & 3;
+    const u32 immhi = (word >> 5) & 0x7FFFF;
+    s32 imm21 = static_cast<s32>((immhi << 2) | immlo);
+    if ((imm21 & (1 << 20)) != 0) {
+        imm21 |= ~((1 << 21) - 1);
+    }
+    byte_delta = static_cast<s64>(imm21) << 12;
+    return true;
+}
+
+bool IsLdrSUnsigned(u32 word, u32& rt, u32& rn, u32& byte_off) {
+    if ((word & 0xFFC00000) != 0xBD400000) {
+        return false;
+    }
+    byte_off = ((word >> 10) & 0xFFF) << 2;
+    rn = (word >> 5) & 31;
+    rt = word & 31;
+    return true;
+}
+
+bool IsLdrSLiteral(u32 word, u32& rt, s64& byte_delta) {
+    // ldr st, label. The 32-bit literal form is the only encoding under this mask.
+    if ((word & 0xFF000000) != 0x1C000000) {
+        return false;
+    }
+    rt = word & 31;
+    s32 imm19 = static_cast<s32>((word >> 5) & 0x7FFFF);
+    if ((imm19 & (1 << 18)) != 0) {
+        imm19 |= ~((1 << 19) - 1);
+    }
+    byte_delta = static_cast<s64>(imm19) << 2;
     return true;
 }
 
@@ -150,7 +190,7 @@ u32 EncodeLdrS(u32 rt, u32 rn, u32 byte_off) {
     return 0xBD400000u | (imm12 << 10) | (rn << 5) | rt;
 }
 
-enum class Kind { Vfr, Scale, Divide };
+enum class Kind { Vfr, Scale, Divide, Plain };
 
 struct Site {
     u64 offset{};
@@ -188,16 +228,72 @@ struct Chain {
     }
 };
 
-std::vector<Site> Scan(std::span<const u8> image, u64 text_off, u64 text_size) {
+struct Found {
     std::vector<Site> sites;
+    int pooled{};
+};
+
+bool PoolBits(std::span<const u8> image, u64 load_base, u64 guest, u32& bits) {
+    if (guest < load_base) {
+        return false;
+    }
+    const u64 offset = guest - load_base;
+    if ((offset & 3) != 0 || offset + sizeof(u32) > image.size()) {
+        return false;
+    }
+    bits = ReadU32(image, offset);
+    return bits == kRecipBits || bits == kSixtyBits;
+}
+
+Found Scan(std::span<const u8> image, u64 text_off, u64 text_size, u64 load_base) {
+    Found found;
     if (text_size < 4 || text_off > image.size() || text_size > image.size() - text_off) {
-        return sites;
+        return found;
     }
     Chain chain;
+    // Page address last left in each X register by adrp. Cleared with the arithmetic chain.
+    u64 page[32]{};
     const u64 end = text_off + (text_size & ~u64{3});
     int index = 0;
+    const auto take_pool = [&](u32 rt, u32 bits) {
+        chain.KillWritesS(rt);
+        if (bits == kRecipBits) {
+            chain.recip = {static_cast<u32>(rt), index};
+        } else {
+            chain.sixty_f = {static_cast<u32>(rt), index};
+        }
+        ++found.pooled;
+    };
     for (u64 pc = text_off; pc + 4 <= end; pc += 4, ++index) {
         const u32 word = ReadU32(image, pc);
+        u32 rt = 0;
+        u32 addr_reg = 0;
+        u32 byte_off = 0;
+        s64 delta = 0;
+        if (IsAdrp(word, addr_reg, delta)) {
+            const s64 target = static_cast<s64>((load_base + pc) & ~u64{0xFFF}) + delta;
+            page[addr_reg] = target > 0 ? static_cast<u64>(target) : 0;
+            continue;
+        }
+        if (IsLdrSUnsigned(word, rt, addr_reg, byte_off)) {
+            u32 bits = 0;
+            if (page[addr_reg] != 0 && PoolBits(image, load_base, page[addr_reg] + byte_off, bits)) {
+                take_pool(rt, bits);
+            } else {
+                chain.KillWritesS(rt);
+            }
+            continue;
+        }
+        if (IsLdrSLiteral(word, rt, delta)) {
+            u32 bits = 0;
+            const s64 guest = static_cast<s64>(load_base + pc) + delta;
+            if (guest > 0 && PoolBits(image, load_base, static_cast<u64>(guest), bits)) {
+                take_pool(rt, bits);
+            } else {
+                chain.KillWritesS(rt);
+            }
+            continue;
+        }
         u32 hw = 0, imm = 0, rd = 0, rn = 0, rm = 0, sd = 0, sn = 0, sm = 0;
         if (IsMovz(word, hw, imm, rd)) {
             const bool sixty = hw == 0 && imm == 60;
@@ -261,10 +357,14 @@ std::vector<Site> Scan(std::span<const u8> image, u64 text_off, u64 text_size) {
         if (IsFdiv(word, sd, sn, sm)) {
             if (chain.one.live(index) && chain.rate.live(index) && sn == chain.one.reg &&
                 sm == chain.rate.reg) {
-                sites.push_back({pc, sd, Kind::Vfr});
+                found.sites.push_back({pc, sd, Kind::Vfr});
             } else if (chain.conv.live(index) && chain.sixty_f.live(index) && sn == chain.conv.reg &&
                        sm == chain.sixty_f.reg) {
-                sites.push_back({pc, sd, Kind::Divide});
+                found.sites.push_back({pc, sd, Kind::Divide});
+            } else if (chain.one.live(index) && chain.conv.live(index) && sn == chain.one.reg &&
+                       sm == chain.conv.reg) {
+                // 1 / (float)n, with n not produced by dividing by 60. Bananza's refresh path.
+                found.sites.push_back({pc, sd, Kind::Plain});
             }
             chain.KillWritesS(sd);
             continue;
@@ -274,7 +374,7 @@ std::vector<Site> Scan(std::span<const u8> image, u64 text_off, u64 text_size) {
                                ((sn == chain.conv.reg && sm == chain.recip.reg) ||
                                 (sn == chain.recip.reg && sm == chain.conv.reg));
             if (scale) {
-                sites.push_back({pc, sd, Kind::Scale});
+                found.sites.push_back({pc, sd, Kind::Scale});
             }
             chain.KillWritesS(sd);
             continue;
@@ -283,8 +383,9 @@ std::vector<Site> Scan(std::span<const u8> image, u64 text_off, u64 text_size) {
             continue;
         }
         chain.Clear();
+        std::memset(page, 0, sizeof(page));
     }
-    return sites;
+    return found;
 }
 
 bool FitsBranch(s64 delta) {
@@ -326,23 +427,25 @@ std::chrono::steady_clock::time_point g_last_present{};
 Nx2FrameStepScan Nx2PatchBananzaFrameStep(std::span<u8> image, u64 text_off, u64 text_size,
                                           u64 text_end, u64 float_off, u64 load_base) {
     Nx2FrameStepScan result;
-    const auto sites = Scan(image, text_off, text_size);
-    for (const auto& site : sites) {
+    const auto found = Scan(image, text_off, text_size, load_base);
+    result.pooled = found.pooled;
+    for (const auto& site : found.sites) {
         switch (site.kind) {
         case Kind::Vfr: ++result.vfr; break;
         case Kind::Scale: ++result.scale; break;
         case Kind::Divide: ++result.divide; break;
+        case Kind::Plain: ++result.plain; break;
         }
     }
     const Site* chosen = nullptr;
     const auto only = [&](Kind kind) -> const Site* {
-        const Site* found = nullptr;
-        for (const auto& site : sites) {
+        const Site* found_site = nullptr;
+        for (const auto& site : found.sites) {
             if (site.kind == kind) {
-                found = &site;
+                found_site = &site;
             }
         }
-        return found;
+        return found_site;
     };
     if (result.vfr == 1) {
         chosen = only(Kind::Vfr);
@@ -350,6 +453,8 @@ Nx2FrameStepScan Nx2PatchBananzaFrameStep(std::span<u8> image, u64 text_off, u64
         chosen = only(Kind::Scale);
     } else if (result.vfr == 0 && result.scale == 0 && result.divide == 1) {
         chosen = only(Kind::Divide);
+    } else if (result.vfr == 0 && result.scale == 0 && result.divide == 0 && result.plain == 1) {
+        chosen = only(Kind::Plain);
     }
     if (chosen == nullptr || float_off + sizeof(float) > image.size() || (text_size & 3) != 0) {
         return result;

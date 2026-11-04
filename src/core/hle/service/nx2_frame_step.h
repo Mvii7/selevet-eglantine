@@ -29,6 +29,8 @@ struct Nx2FrameStepScan {
     int vfr{};
     int scale{};
     int divide{};
+    int plain{};
+    int pooled{};
     std::optional<Nx2FrameStepPatch> patch;
 };
 

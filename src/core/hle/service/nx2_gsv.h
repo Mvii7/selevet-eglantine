@@ -1565,11 +1565,15 @@ private:
 
     // The console flips one frame per vblank and keeps the rest queued. Present word 12 is
     // (swap interval << 16) | refresh. A game that asks for two vblanks runs at double speed if
-    // every present returns after one. A missed slot is not repaid with another immediate present.
+    // every present returns after one. Bananza is the exception: that word is its dynamic rate,
+    // and waiting out a slower request holds it there after the frame was already finished.
+    // A missed slot is not repaid with another immediate present.
     Nx2PresentPacer m_present_pacer;
     std::chrono::steady_clock::time_point m_next_vblank{};
     u32 m_paced_interval{};
     u32 m_paced_refresh{};
+    u32 m_requested_interval{};
+    u32 m_requested_refresh{};
 
     void PaceToVblank(u32 timing) {
         // "Limit speed to 30 FPS" stops presents faster than 30. A request for three vblanks stays.
@@ -1587,16 +1591,28 @@ private:
             note();
             return;
         }
-        u32 swap_interval = std::clamp<u32>(timing >> 16, 1u, 4u);
+        const u32 requested_interval = std::clamp<u32>(timing >> 16, 1u, 4u);
+        const u32 requested_refresh =
+            (timing & 0xffff) >= 30 && (timing & 0xffff) <= 240 ? timing & 0xffff : 60;
+        const bool bananza =
+            Kernel::GetCurrentProcess(system.Kernel()).GetProgramId() == Nx2BananzaProgramId;
+        u32 swap_interval = bananza ? 1u : requested_interval;
+        u32 refresh_rate = bananza ? 60u : requested_refresh;
         if (cap_30) {
             swap_interval = (std::max)(swap_interval, 2u);
+            refresh_rate = 60;
         }
-        const u32 refresh_rate = (timing & 0xffff) >= 30 && (timing & 0xffff) <= 240 ? timing & 0xffff : 60;
-        if (swap_interval != m_paced_interval || refresh_rate != m_paced_refresh) {
+        if (swap_interval != m_paced_interval || refresh_rate != m_paced_refresh ||
+            requested_interval != m_requested_interval || requested_refresh != m_requested_refresh) {
             m_paced_interval = swap_interval;
             m_paced_refresh = refresh_rate;
-            LOG_INFO(Service, "nx2:vi2 present #{} interval {} at {} Hz (word 12 = {:#x})",
-                     m_presents, swap_interval, refresh_rate, timing);
+            m_requested_interval = requested_interval;
+            m_requested_refresh = requested_refresh;
+            LOG_INFO(Service,
+                     "nx2:vi2 present #{} holding interval {} at {} Hz; game asked for {} at {} Hz "
+                     "(word 12 = {:#x})",
+                     m_presents, swap_interval, refresh_rate, requested_interval, requested_refresh,
+                     timing);
         }
         const auto interval = std::chrono::nanoseconds{
             100'000'000'000LL * swap_interval / refresh_rate /
