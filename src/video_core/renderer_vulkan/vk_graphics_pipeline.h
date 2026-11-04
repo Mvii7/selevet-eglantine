@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <type_traits>
 #include <vector>
 
@@ -117,6 +118,10 @@ public:
         return configure_func(this, is_indexed);
     }
 
+    /// Textures, pipeline, and geometry already match. Upload uniforms and rewrite descriptors.
+    /// False when a constant-buffer word that selects a texture or storage buffer changed.
+    bool ConfigureUniformsOnly(bool is_indexed);
+
     [[nodiscard]] GraphicsPipeline* Next(const GraphicsPipelineCacheKey& current_key) noexcept {
         if (key == current_key) {
             return this;
@@ -143,6 +148,14 @@ public:
 private:
     template <typename Spec>
     bool ConfigureImpl(bool is_indexed);
+
+    template <typename Func>
+    bool WalkDescriptorWords(Func&& func) const;
+
+    void CaptureConstantReuse(std::span<const VideoCommon::ImageViewInOut> views,
+                              std::span<const VideoCommon::SamplerId> samplers);
+
+    [[nodiscard]] bool DescriptorWordsMatch() const;
 
     bool ConfigureDraw(const RescalingPushConstant& rescaling,
                        const RenderAreaPushConstant& render_are);
@@ -184,6 +197,10 @@ private:
     vk::Pipeline pipeline;
 
     DescriptorBufferLayout descriptor_buffer_layout;
+    std::vector<u32> cached_words;
+    std::vector<VideoCommon::ImageViewInOut> cached_views;
+    std::vector<VideoCommon::SamplerId> cached_samplers;
+
     std::vector<DescriptorUpdateEntry> last_descriptor_payload;
     VkDeviceSize last_descriptor_buffer_offset{};
     u32 last_descriptor_buffer_chunk{};

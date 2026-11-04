@@ -763,7 +763,14 @@ FramebufferId TextureCache<P>::GetFramebufferId(const RenderTargets& key) {
 template <class P>
 void TextureCache<P>::WriteMemory(DAddr cpu_addr, size_t size) {
     Tegra::Nx2BumpDrawMemory();
-    ForEachImageInRegion(cpu_addr, size, [this, cpu_addr, size](ImageId image_id, Image& image) {
+    MarkCpuModified(cpu_addr, size);
+}
+
+template <class P>
+bool TextureCache<P>::MarkCpuModified(DAddr cpu_addr, size_t size) {
+    bool hit = false;
+    ForEachImageInRegion(cpu_addr, size, [this, cpu_addr, size, &hit](ImageId image_id, Image& image) {
+        hit = true;
         if (True(image.flags & ImageFlagBits::UnwrittenSparse)) {
             // Written at last: a backed image replaces it where it is used next.
             image.flags |= ImageFlagBits::CpuModified | ImageFlagBits::Remapped;
@@ -788,6 +795,7 @@ void TextureCache<P>::WriteMemory(DAddr cpu_addr, size_t size) {
             UntrackImage(image, image_id);
         }
     });
+    return hit;
 }
 
 template <class P>
