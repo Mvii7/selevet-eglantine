@@ -1104,10 +1104,15 @@ void BufferCache<P>::BindHostGraphicsUniformBuffer(size_t stage, u32 index, u32 
             if (runtime.BindSmallUniformReusing(device_memory, stage, index, device_addr, size)) {
                 return;
             }
+            // One copy of this constant for the draw. Later stages that bind the same
+            // bytes add the descriptor and do not stage it again.
+            runtime.StreamGraphicsUniform(device_memory, device_addr, size);
+            return;
+        } else {
+            const std::span<u8> span = runtime.BindMappedUniformBuffer(stage, binding_index, size);
+            device_memory.ReadBlockUnsafe(device_addr, span.data(), size);
+            return;
         }
-        const std::span<u8> span = runtime.BindMappedUniformBuffer(stage, binding_index, size);
-        device_memory.ReadBlockUnsafe(device_addr, span.data(), size);
-        return;
     }
     // Classic cached path
     if (SynchronizeBuffer(buffer, device_addr, size)) {
@@ -1888,12 +1893,13 @@ void BufferCache<P>::TouchBuffer(Buffer& buffer, BufferId buffer_id) noexcept {
 template <class P>
 bool BufferCache<P>::SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 size) {
     // The dirty bitmap for a multi-megabyte mesh is clean after the first upload. Walking it
-    // on every later draw is the bulk of the "update buffers" time.
+    // on every later draw is the bulk of the "update buffers" time. A write elsewhere in the
+    // same 4 MiB page does not make this range dirty.
     if (!memory_tracker.HasPendingCpuUpload(device_addr, size)) {
         static u64 skips = 0;
         ++skips;
         if (skips == 1 || skips == 100000 || skips % 1000000 == 0) {
-            LOG_INFO(HW_GPU, "Clean buffer uploads skipped {}", skips);
+            LOG_INFO(HW_GPU, "Clean buffer range skipped {}", skips);
         }
         return true;
     }

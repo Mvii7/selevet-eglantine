@@ -574,6 +574,23 @@ TEST_CASE("MemoryTracker: FlushCachedWrites batching") {
     REQUIRE(std::get<1>(calls[0]) == PAGE * 3);
 }
 
+TEST_CASE("MemoryTracker: Clean range in a dirty page") {
+    RasterizerInterface rasterizer;
+    std::optional<MemoryTracker> memory_track(rasterizer);
+    memory_track->UnmarkRegionAsCpuModified(c, WORD * 2);
+    REQUIRE(!memory_track->HasPendingCpuUpload(c, WORD));
+    REQUIRE(!memory_track->HasPendingCpuUpload(c + WORD, WORD));
+    memory_track->MarkRegionAsCpuModified(c, PAGE);
+    REQUIRE(memory_track->HasPendingCpuUpload(c, PAGE));
+    REQUIRE(memory_track->HasPendingCpuUpload(c, WORD));
+    REQUIRE(!memory_track->HasPendingCpuUpload(c + WORD, WORD));
+    int num = 0;
+    memory_track->ForEachUploadRange(c + WORD, WORD, [&](u64, u64) { ++num; });
+    REQUIRE(num == 0);
+    memory_track->CachedCpuWrite(c + WORD, PAGE);
+    REQUIRE(memory_track->HasPendingCpuUpload(c + WORD, WORD));
+}
+
 TEST_CASE("DeviceMemoryManager: UpdatePagesCachedBatch basic") {
     Core::DeviceMemory device_memory;
     Tegra::MaxwellDeviceMemoryManager manager(device_memory);

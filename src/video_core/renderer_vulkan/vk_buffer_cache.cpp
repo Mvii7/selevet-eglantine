@@ -427,6 +427,39 @@ void BufferCacheRuntime::TickFrame(Common::SlotVector<Buffer>& slot_buffers) noe
     }
 }
 
+void BufferCacheRuntime::StreamGraphicsUniform(Tegra::MaxwellDeviceMemoryManager& device_memory,
+                                               DAddr device_addr, u32 size) {
+    for (u32 index = 0; index < streamed_uniform_count; ++index) {
+        const StreamedUniform& prior = streamed_uniforms[index];
+        if (prior.addr != device_addr || prior.size != size) {
+            continue;
+        }
+        guest_descriptor_queue.AddBuffer(prior.buffer, prior.device_address,
+                                        static_cast<u32>(prior.offset), size);
+        static u64 reuses = 0;
+        ++reuses;
+        if (reuses == 1 || reuses == 100000 || reuses % 1000000 == 0) {
+            LOG_INFO(HW_GPU, "Stage uniform reused {}", reuses);
+        }
+        return;
+    }
+    const StagingBufferRef ref = staging_pool.Request(size, MemoryUsage::Upload);
+    if (size != 0) {
+        device_memory.ReadBlockUnsafe(device_addr, ref.mapped_span.data(), size);
+    }
+    if (streamed_uniform_count < streamed_uniforms.size()) {
+        StreamedUniform& slot = streamed_uniforms[streamed_uniform_count];
+        ++streamed_uniform_count;
+        slot.addr = device_addr;
+        slot.size = size;
+        slot.buffer = ref.buffer;
+        slot.device_address = ref.device_address;
+        slot.offset = ref.offset;
+    }
+    guest_descriptor_queue.AddBuffer(ref.buffer, ref.device_address, static_cast<u32>(ref.offset),
+                                    size);
+}
+
 bool BufferCacheRuntime::BindSmallUniformReusing(
     Tegra::MaxwellDeviceMemoryManager& device_memory, size_t stage, u32 index,
     DAddr device_addr, u32 size) {

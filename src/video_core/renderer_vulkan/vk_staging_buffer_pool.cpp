@@ -128,23 +128,37 @@ void StagingBufferPool::TickFrame() {
 }
 
 StagingBufferRef StagingBufferPool::GetStreamBuffer(size_t size) {
-    if (AreRegionsActive(Region(free_iterator) + 1,
-                         (std::min)(Region(iterator + size) + 1, NUM_SYNCS))) {
-        // Avoid waiting for the previous usages to be free
-        return GetStagingBuffer(size, MemoryUsage::Upload);
+    // Regions ahead of the ring are idle until the window moves onto a region from the
+    // previous pass. The GPU tick only moves forward, so a clear window stays clear and
+    // the tick is not read again on every uniform.
+    const size_t region_begin = Region(free_iterator) + 1;
+    const size_t region_end = (std::min)(Region(iterator + size) + 1, NUM_SYNCS);
+    if (region_begin != stream_check_begin || region_end != stream_check_end ||
+        !stream_check_known) {
+        if (AreRegionsActive(region_begin, region_end)) {
+            stream_check_known = false;
+            return GetStagingBuffer(size, MemoryUsage::Upload);
+        }
+        stream_check_begin = region_begin;
+        stream_check_end = region_end;
+        stream_check_known = true;
     }
-    const u64 current_tick = scheduler.CurrentTick();
-    std::fill(sync_ticks.begin() + Region(used_iterator), sync_ticks.begin() + Region(iterator),
-              current_tick);
+    if (Region(used_iterator) != Region(iterator)) {
+        const u64 current_tick = scheduler.CurrentTick();
+        std::fill(sync_ticks.begin() + Region(used_iterator), sync_ticks.begin() + Region(iterator),
+                  current_tick);
+    }
     used_iterator = iterator;
     free_iterator = (std::max)(free_iterator, iterator + size);
 
     if (iterator + size >= stream_buffer_size) {
+        const u64 wrap_tick = scheduler.CurrentTick();
         std::fill(sync_ticks.begin() + Region(used_iterator), sync_ticks.begin() + NUM_SYNCS,
-                  current_tick);
+                  wrap_tick);
         used_iterator = 0;
         iterator = 0;
         free_iterator = size;
+        stream_check_known = false;
 
         if (AreRegionsActive(0, Region(size) + 1)) {
             // Avoid waiting for the previous usages to be free

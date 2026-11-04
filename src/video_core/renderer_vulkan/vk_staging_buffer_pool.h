@@ -118,6 +118,9 @@ private:
     size_t used_iterator = 0;
     size_t free_iterator = 0;
     std::array<u64, NUM_SYNCS> sync_ticks{};
+    size_t stream_check_begin = 0;
+    size_t stream_check_end = 0;
+    bool stream_check_known = false;
 
     StagingBuffersCache device_local_cache;
     StagingBuffersCache upload_cache;

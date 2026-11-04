@@ -567,6 +567,7 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
 
     RescalingPushConstant rescaling;
     RenderAreaPushConstant render_area;
+    buffer_cache.runtime.ResetGraphicsUniformStream();
     const VideoCommon::SamplerId* samplers_it{samplers.data()};
     const VideoCommon::ImageViewInOut* views_it{views.data()};
     const auto prepare_stage{[&](size_t stage) LAMBDA_FORCEINLINE {

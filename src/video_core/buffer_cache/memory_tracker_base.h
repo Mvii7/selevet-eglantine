@@ -136,8 +136,9 @@ public:
         cached_pages.clear();
     }
 
-    /// False when every 4 MiB page in the range exists and has no CPU or untracked bits.
-    /// A missing page still needs the upload walk: creating it treats the page as dirty.
+    /// False when every 4 MiB page in the range exists and this range has no CPU or untracked
+    /// bits. A write elsewhere in the page does not count. A missing page still needs the
+    /// upload walk: creating it treats the page as dirty.
     [[nodiscard]] bool HasPendingCpuUpload(VAddr query_cpu_addr, u64 query_size) const noexcept {
         if (query_size == 0) {
             return false;
@@ -149,7 +150,8 @@ public:
             const std::size_t copy_amount{
                 std::min<std::size_t>(HIGHER_PAGE_SIZE - page_offset, remaining_size)};
             const Manager* const manager{top_tier[page_index]};
-            if (manager == nullptr || manager->HasPendingUpload()) {
+            if (manager == nullptr ||
+                manager->RangeHasPendingUpload(page_offset, static_cast<u64>(copy_amount))) {
                 return true;
             }
             page_index++;

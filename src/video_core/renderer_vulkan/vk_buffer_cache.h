@@ -164,6 +164,16 @@ public:
     bool BindSmallUniformReusing(Tegra::MaxwellDeviceMemoryManager& device_memory,
                                 size_t stage, u32 index, DAddr device_addr, u32 size);
 
+    /// Drops copies remembered for the draw that just finished setup.
+    void ResetGraphicsUniformStream() noexcept {
+        streamed_uniform_count = 0;
+    }
+
+    /// Copies a uniform into the stream ring, or binds the copy already made for this
+    /// draw when a later stage uses the same address and size.
+    void StreamGraphicsUniform(Tegra::MaxwellDeviceMemoryManager& device_memory, DAddr device_addr,
+                               u32 size);
+
     std::span<u8> BindMappedUniformBuffer([[maybe_unused]] size_t stage,
                                           [[maybe_unused]] u32 binding_index,
                                           u32 size) {
@@ -289,6 +299,16 @@ private:
 
     bool limit_dynamic_storage_buffers = false;
     u32 max_dynamic_storage_buffers = (std::numeric_limits<u32>::max)();
+
+    struct StreamedUniform {
+        DAddr addr{};
+        u32 size{};
+        VkBuffer buffer{};
+        VkDeviceAddress device_address{};
+        VkDeviceSize offset{};
+    };
+    std::array<StreamedUniform, 16> streamed_uniforms{};
+    u32 streamed_uniform_count{};
 
     // Index binds survive inside one command buffer. Recording the same one on every rock
     // is dropped until the scheduler starts a new recording epoch.
